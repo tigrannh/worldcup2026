@@ -1,0 +1,19 @@
+# SECRETS — never commit these
+.env
+.streamlit/secrets.toml
+ameria_credentials.csv
+users_backup.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# logs / local
+streamlit.log
+.idea/
+
+# excel source files (large, not needed for the app)
+*.xlsx
+*.xlsm

@@ -1,0 +1,8 @@
+streamlit
+supabase
+streamlit-authenticator
+python-dotenv
+pandas
+requests
+bcrypt
+pytz

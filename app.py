@@ -123,7 +123,8 @@ st.markdown("""
     [data-testid="stToolbar"] { display: none !important; }
     [data-testid="stStatusWidget"] { display: none !important; }
     [class*="viewerBadge"] { display: none !important; }
-    a[href*="share.streamlit.io"] { display: none !important; }
+    [data-testid="stAppViewerBadge"] { display: none !important; }
+    a[href*="streamlit.io"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 

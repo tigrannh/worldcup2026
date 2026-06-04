@@ -117,6 +117,13 @@ st.markdown("""
         background-color: rgba(255,255,255,0.08) !important; color: #FFFFFF !important;
     }
     div[data-baseweb="select"] input { color: #FFFFFF !important; }
+    /* hide Streamlit chrome so viewers can't reach GitHub / other apps */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    [data-testid="stToolbar"] { display: none !important; }
+    [data-testid="stStatusWidget"] { display: none !important; }
+    [class*="viewerBadge"] { display: none !important; }
+    a[href*="share.streamlit.io"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 

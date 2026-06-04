@@ -102,9 +102,16 @@ st.markdown("""
     }
     .rules-table th { background: rgba(0,255,136,0.15); font-family:'Orbitron'; }
     div.stButton > button {
-        background: linear-gradient(45deg, #00ff88, #00d4ff) !important; color: #000 !important;
+        background: linear-gradient(45deg, #00ff88, #00d4ff) !important;
+        color: #000000 !important;
         font-family: 'Orbitron', sans-serif !important; font-weight: 900 !important;
         border-radius: 50px !important; width: 100%; transition: 0.3s !important;
+    }
+    /* force the button LABEL itself black + bold (beats the dark theme) */
+    div.stButton > button p,
+    div.stButton > button div,
+    div.stButton > button span {
+        color: #000000 !important; font-weight: 900 !important;
     }
     /* dropdown (selectbox) menus — readable on the dark theme */
     div[data-baseweb="popover"] ul { background-color: #16213e !important; }

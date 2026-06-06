@@ -624,6 +624,12 @@ elif page == "ՄԵԴԱԼՆԵՐ":
             elif len(set(picks)) != 3:
                 st.error("Երեքն էլ պետք է տարբեր թիմեր լինեն։")
             else:
+                # re-read the deadline NOW: the page may have been open past it
+                dl = supabase.table("settings").select("medal_deadline").execute().data
+                dlv = dl[0].get('medal_deadline') if dl else None
+                if dlv and now_utc() >= parse_dt(dlv):
+                    st.error("🔒 Ուշացաք — մեդալների վերջնաժամկետն անցել է։")
+                    st.rerun()
                 # re-read the DB so a double-click / two tabs can't overwrite a saved pick
                 fresh = supabase.table("users").select("champion_pick").eq(
                     "id", user_data['id']).execute().data
@@ -915,9 +921,14 @@ elif page == "ԱԴՄԻՆ" and is_admin:
                                 default=[t for t in cur_quals if t in all_teams], key="qmulti")
         st.caption(f"Ընտրված՝ {len(picked)} թիմ")
         if st.button("💾 Պահպանել անցած թիմերը և վերահաշվարկել"):
-            supabase.table("qualifiers").delete().neq("team_name", "").execute()
+            # Upsert the selected teams FIRST (so the list is never momentarily
+            # empty), then drop only the ones no longer selected. No data-loss gap.
             if picked:
-                supabase.table("qualifiers").upsert([{"team_name": t} for t in picked]).execute()
+                supabase.table("qualifiers").upsert(
+                    [{"team_name": t} for t in picked]).execute()
+                supabase.table("qualifiers").delete().not_.in_("team_name", picked).execute()
+            else:
+                supabase.table("qualifiers").delete().neq("team_name", "").execute()
             with st.spinner("Վերահաշվարկ..."):
                 msg = scoring.recalculate(supabase)
             st.success(f"✅ {len(picked)} թիմ պահպանված — {msg}")

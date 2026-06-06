@@ -116,12 +116,13 @@ You get the **best** matching tier only (exact = just the exact value, not exact
 
 ### 7c. Group bonus (admin-entered winner/runner-up)
 - The **real** group winner & runner-up are **entered by the admin** (`group_official`), never derived from scores.
-- The **user's predicted** group table is built from the games they actually predicted (partial allowed), ranked by the **exact FIFA method**: Points → Goal Difference → Goals Scored → **Head-to-head** (points, GD, goals) → stable order.
+- The **user's predicted** group table is ranked by the **exact FIFA method**: Points → Goal Difference → Goals Scored → **Head-to-head** (points, GD, goals among the tied teams, applied recursively) → stable order.
+- **Eligibility: the user must have predicted ALL 6 games of the group.** A partial prediction (even 5 of 6) earns **no** group bonus and contributes **no** qualifiers from that group — match points for the individual predicted games are unaffected.
 - Correct group **Winner** → **+6**, correct **Runner-up** → **+4**, per group (×12). Awarded only after the admin enters that group's official result.
 
 ### 7d. Qualification bonus (admin-entered qualifiers)
 - The **real** 32 qualifiers are **entered by the admin** (`qualifiers` table; includes the 8 best third-placed teams).
-- **+1** per team the user correctly predicted to reach the Round of 32 (max **+32**) — i.e. the user's predicted top-2 of each group plus their predicted best-8 thirds, intersected with the official 32.
+- **+1** per team the user correctly predicted to reach the Round of 32 (max **+32**) — i.e. the user's predicted top-2 of each **fully-predicted** group plus their predicted best-8 thirds, intersected with the official 32.
 - Awarded once the admin has saved the qualifier list.
 
 ### 7e. Medals (pre-tournament, ONE-TIME locked)

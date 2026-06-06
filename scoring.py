@@ -103,30 +103,40 @@ def _standings(rows):
             v['gd'] = v['gf'] - v['ga']
         return h
 
-    # 1) primary sort: overall pts -> gd -> gf -> stable order
-    teams = sorted(t.keys(),
-                   key=lambda tm: (t[tm]['pts'], t[tm]['gd'], t[tm]['gf'], -idx[tm]),
-                   reverse=True)
+    def rank(subset, use_h2h):
+        """Order `subset` by FIFA criteria. With use_h2h=False use the overall
+        table; ties are then broken by head-to-head among the tied teams, and if
+        that still leaves a sub-group tied, head-to-head is RE-APPLIED to just
+        that sub-group (recursive, exactly as FIFA does). Unbreakable ties fall
+        to stable first-seen order."""
+        if len(subset) <= 1:
+            return list(subset)
+        stats = t if not use_h2h else h2h(subset)
+        ordered = sorted(subset,
+                         key=lambda tm: (stats[tm]['pts'], stats[tm]['gd'],
+                                         stats[tm]['gf'], -idx[tm]),
+                         reverse=True)
+        out, i = [], 0
+        while i < len(ordered):
+            j = i
+            key_i = (stats[ordered[i]]['pts'], stats[ordered[i]]['gd'], stats[ordered[i]]['gf'])
+            while (j + 1 < len(ordered) and
+                   (stats[ordered[j + 1]]['pts'], stats[ordered[j + 1]]['gd'],
+                    stats[ordered[j + 1]]['gf']) == key_i):
+                j += 1
+            block = ordered[i:j + 1]
+            if len(block) == 1:
+                out.append(block[0])
+            elif not use_h2h:
+                out.extend(rank(block, use_h2h=True))          # overall tie -> H2H
+            elif len(block) < len(subset):
+                out.extend(rank(block, use_h2h=True))          # refine the sub-group
+            else:
+                out.extend(block)                              # H2H can't separate -> first-seen
+            i = j + 1
+        return out
 
-    # 2) break any (pts, gd, gf) ties with the head-to-head mini-table
-    result, i = [], 0
-    while i < len(teams):
-        j = i
-        key_i = (t[teams[i]]['pts'], t[teams[i]]['gd'], t[teams[i]]['gf'])
-        while (j + 1 < len(teams) and
-               (t[teams[j + 1]]['pts'], t[teams[j + 1]]['gd'], t[teams[j + 1]]['gf']) == key_i):
-            j += 1
-        if j > i:
-            tied = teams[i:j + 1]
-            h = h2h(tied)
-            tied.sort(key=lambda tm: (h[tm]['pts'], h[tm]['gd'], h[tm]['gf'], -idx[tm]),
-                      reverse=True)
-            result.extend(tied)
-        else:
-            result.append(teams[i])
-        i = j + 1
-
-    return [(tm, t[tm]) for tm in result]
+    return [(tm, t[tm]) for tm in rank(list(t.keys()), use_h2h=False)]
 
 
 def _chunks(seq, n=400):
@@ -174,7 +184,8 @@ def recalculate(sb):
     match_stage = {m['id']: m['stage'] for m in matches}
     chosen_joker = {}                       # (user_id, stage) -> True once taken
     active_joker = set()                    # prediction ids that actually get ×2
-    for p in sorted(preds, key=lambda p: (p.get('created_at') or '')):
+    # earliest created_at, then lowest id -> fully deterministic even on a tie
+    for p in sorted(preds, key=lambda p: (p.get('created_at') or '', p.get('id') or 0)):
         if p.get('use_joker'):
             stg = match_stage.get(p['match_id'])
             if stg in JOKER_STAGES and (p['user_id'], stg) not in chosen_joker:
@@ -217,15 +228,14 @@ def recalculate(sb):
         third_picks = []
 
         for g, gms in groups.items():
-            # build the user's predicted table from the games they DID predict
-            rows = []
-            for mm in gms:
-                up = pred_by.get((uid, mm['id']))
-                if up:
-                    rows.append((mm['home_team'], mm['away_team'],
-                                 up['pred_home'], up['pred_away']))
-            if not rows:
+            # A group's bonus (winner/runner-up/qualifiers) is earned ONLY if the
+            # user predicted ALL the group's games — a partial prediction can't
+            # honestly claim the group's final order, so it earns nothing here.
+            ups = [pred_by.get((uid, mm['id'])) for mm in gms]
+            if len(gms) < 6 or any(u is None for u in ups):
                 continue
+            rows = [(mm['home_team'], mm['away_team'], up['pred_home'], up['pred_away'])
+                    for mm, up in zip(gms, ups)]
             pst = _standings(rows)
 
             off = group_official.get(g)

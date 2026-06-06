@@ -26,7 +26,6 @@ def seed_users():
             "email": row['Email'],
             "password_hash": hashed,
             "total_points": 0,
-            "jokers_remaining": 5
         })
     
     # Bulk insert into Supabase

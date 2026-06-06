@@ -1,12 +1,24 @@
 """
-World Cup 2026 Arena — Scoring Engine.
+World Cup 2026 Arena — Scoring Engine (admin-driven bonus edition).
 
 ONE function: recalculate(supabase). It wipes every score and recomputes
-everything from the raw matches + predictions. Because it always recomputes
-from zero, the admin can fix a wrong score 10 times and the totals are always
-correct — points are NEVER double-counted.
+everything from scratch, so the admin can fix a result 10 times and the totals
+are always correct — points are NEVER double-counted.
 
-Call it after the admin enters/edits any result.
+Two clean sources:
+  • MATCH POINTS  → from the admin-entered 90-minute score (exact / diff / outcome).
+  • BONUS POINTS  → ONLY from what the admin has officially entered:
+        group_official     (each group's real winner + runner-up)
+        qualifiers         (the 32 teams that really reached the Round of 32)
+        tournament_result  (real Gold / Silver / Bronze)
+    The engine NEVER guesses the real standings from scores. Until the admin
+    enters the official results, bonus stays 0.
+
+Each user's *predicted* group table IS computed from their predicted scores,
+using the exact FIFA tie-break method, then compared to the admin's official
+result.
+
+Call recalculate(sb) after the admin enters/edits any result or official outcome.
 """
 from collections import defaultdict
 
@@ -47,9 +59,19 @@ def base_points(stage, ph, pa, rh, ra):
 
 def _standings(rows):
     """rows: list of (home_team, away_team, home_score, away_score).
-    Returns ordered list of (team, stats) by Points -> GD -> GF (FIFA-style)."""
+
+    Ranks teams by the exact FIFA group method:
+      1) Points  2) Goal difference  3) Goals scored
+      4) Head-to-head points  5) H2H goal difference  6) H2H goals scored
+      7) stable first-seen order (Fair Play / drawing of lots aren't computable).
+    Returns an ordered list of (team, stats)."""
     t = defaultdict(lambda: {'pts': 0, 'gf': 0, 'ga': 0})
+    order = []                              # first-seen order -> stable fallback
     for home, away, hs, as_ in rows:
+        for team in (home, away):
+            if team not in t:
+                order.append(team)
+                _ = t[team]                 # materialise the entry
         t[home]['gf'] += hs; t[home]['ga'] += as_
         t[away]['gf'] += as_; t[away]['ga'] += hs
         if hs > as_:
@@ -60,13 +82,64 @@ def _standings(rows):
             t[home]['pts'] += 1; t[away]['pts'] += 1
     for s in t.values():
         s['gd'] = s['gf'] - s['ga']
-    return sorted(t.items(), key=lambda kv: (kv[1]['pts'], kv[1]['gd'], kv[1]['gf']),
-                  reverse=True)
+
+    idx = {team: i for i, team in enumerate(order)}
+
+    def h2h(tied):
+        """Mini-table among the tied teams, from the matches between them only."""
+        s = set(tied)
+        h = {tm: {'pts': 0, 'gf': 0, 'ga': 0} for tm in tied}
+        for home, away, hs, as_ in rows:
+            if home in s and away in s:
+                h[home]['gf'] += hs; h[home]['ga'] += as_
+                h[away]['gf'] += as_; h[away]['ga'] += hs
+                if hs > as_:
+                    h[home]['pts'] += 3
+                elif hs < as_:
+                    h[away]['pts'] += 3
+                else:
+                    h[home]['pts'] += 1; h[away]['pts'] += 1
+        for v in h.values():
+            v['gd'] = v['gf'] - v['ga']
+        return h
+
+    # 1) primary sort: overall pts -> gd -> gf -> stable order
+    teams = sorted(t.keys(),
+                   key=lambda tm: (t[tm]['pts'], t[tm]['gd'], t[tm]['gf'], -idx[tm]),
+                   reverse=True)
+
+    # 2) break any (pts, gd, gf) ties with the head-to-head mini-table
+    result, i = [], 0
+    while i < len(teams):
+        j = i
+        key_i = (t[teams[i]]['pts'], t[teams[i]]['gd'], t[teams[i]]['gf'])
+        while (j + 1 < len(teams) and
+               (t[teams[j + 1]]['pts'], t[teams[j + 1]]['gd'], t[teams[j + 1]]['gf']) == key_i):
+            j += 1
+        if j > i:
+            tied = teams[i:j + 1]
+            h = h2h(tied)
+            tied.sort(key=lambda tm: (h[tm]['pts'], h[tm]['gd'], h[tm]['gf'], -idx[tm]),
+                      reverse=True)
+            result.extend(tied)
+        else:
+            result.append(teams[i])
+        i = j + 1
+
+    return [(tm, t[tm]) for tm in result]
 
 
 def _chunks(seq, n=400):
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
+
+
+def _table(sb, name):
+    """Read a table, tolerating the case where it doesn't exist yet."""
+    try:
+        return sb.table(name).select('*').execute().data or []
+    except Exception:
+        return []
 
 
 def recalculate(sb):
@@ -75,12 +148,19 @@ def recalculate(sb):
     matches = sb.table('matches').select('*').execute().data
     preds   = sb.table('predictions').select('*').execute().data
 
+    # ---- admin-entered OFFICIAL results (the only source of bonus) ----------
+    group_official = {r['group_name']: r for r in _table(sb, 'group_official')}
+    official_quals = {r['team_name'] for r in _table(sb, 'qualifiers')}
+    tr_rows = _table(sb, 'tournament_result')
+    medal = tr_rows[0] if tr_rows else {}
+
     finished = {m['id']: m for m in matches
                 if m['status'] == 'finished'
                 and m['home_score'] is not None and m['away_score'] is not None}
 
-    # remember current ranks so the UI can show ↑/↓ movement
-    by_pts = sorted(users, key=lambda u: u.get('total_points') or 0, reverse=True)
+    # remember current ranks (same order as the leaderboard) for ↑/↓ arrows
+    by_pts = sorted(users, key=lambda u: ((u.get('total_points') or 0),
+                                          (u.get('exact_scores_count') or 0)), reverse=True)
     prev_rank = {u['id']: i + 1 for i, u in enumerate(by_pts)}
 
     pts    = {u['id']: 0 for u in users}   # match points
@@ -90,6 +170,17 @@ def recalculate(sb):
     outc   = {u['id']: 0 for u in users}
     wrongc = {u['id']: 0 for u in users}
 
+    # ---- one active joker per (user, stage): the EARLIEST-submitted one wins -
+    match_stage = {m['id']: m['stage'] for m in matches}
+    chosen_joker = {}                       # (user_id, stage) -> True once taken
+    active_joker = set()                    # prediction ids that actually get ×2
+    for p in sorted(preds, key=lambda p: (p.get('created_at') or '')):
+        if p.get('use_joker'):
+            stg = match_stage.get(p['match_id'])
+            if stg in JOKER_STAGES and (p['user_id'], stg) not in chosen_joker:
+                chosen_joker[(p['user_id'], stg)] = True
+                active_joker.add(p['id'])
+
     # ---- 1) MATCH POINTS -----------------------------------------------------
     pred_updates = []
     for p in preds:
@@ -98,7 +189,7 @@ def recalculate(sb):
         if m:
             cat, bp = categorize(m['stage'], p['pred_home'], p['pred_away'],
                                  m['home_score'], m['away_score'])
-            joker = bool(p.get('use_joker')) and m['stage'] in JOKER_STAGES
+            joker = p['id'] in active_joker          # at most one per stage
             earned = bp * (2 if joker else 1)
             if   cat == 'exact':   exact[p['user_id']] += 1
             elif cat == 'diff':    diffc[p['user_id']] += 1
@@ -106,107 +197,70 @@ def recalculate(sb):
             else:                  wrongc[p['user_id']] += 1
         pts[p['user_id']] += earned
         if earned != (p.get('points_earned') or 0):
-            # minimal payload (no auto-generated id) — upsert matches on user+match
             pred_updates.append({
                 'user_id': p['user_id'], 'match_id': p['match_id'],
                 'pred_home': p['pred_home'], 'pred_away': p['pred_away'],
                 'use_joker': p.get('use_joker', False), 'points_earned': earned})
 
-    # index predictions for fast lookup
     pred_by = {(p['user_id'], p['match_id']): p for p in preds}
 
-    # ---- 2) GROUP STANDINGS: real tables, qualifiers, best thirds -----------
+    # group matches grouped by letter
     groups = defaultdict(list)
     for m in matches:
         if m['stage'] == 'group' and m['group_name']:
             groups[m['group_name']].append(m)
 
-    real_table = {}            # group -> ordered standings (only if fully finished)
-    real_quals = set()         # teams that really advanced
-    real_thirds = []           # (group, team, stats) for best-third ranking
-    for g, gms in groups.items():
-        # a real group = 4 teams × 6 matches; only score it once ALL 6 are finished
-        if len(gms) >= 6 and all(mm['id'] in finished for mm in gms):
-            st = _standings([(mm['home_team'], mm['away_team'],
-                              mm['home_score'], mm['away_score']) for mm in gms])
-            real_table[g] = st
-            for team, _ in st[:2]:
-                real_quals.add(team)
-            if len(st) >= 3:
-                real_thirds.append((g, st[2][0], st[2][1]))
-
-    all_groups_done = len(real_table) == 12   # qualification only after all 12 groups finish
-    if all_groups_done and len(real_thirds) >= 8:
-        best = sorted(real_thirds, key=lambda x: (x[2]['pts'], x[2]['gd'], x[2]['gf']),
-                      reverse=True)[:8]
-        for _, team, _ in best:
-            real_quals.add(team)
-
-    # ---- 3) per-user GROUP BONUS + QUALIFICATION BONUS ----------------------
+    # ---- 2) GROUP + QUALIFIER BONUS (admin official only) -------------------
     for u in users:
         uid = u['id']
-        user_quals = set()
-        third_picks = []                 # this user's predicted thirds (all groups)
-        predicted_all_groups = True
+        user_quals  = set()
+        third_picks = []
 
         for g, gms in groups.items():
-            ups = [pred_by.get((uid, mm['id'])) for mm in gms]
-            if any(x is None for x in ups):   # didn't predict whole group -> skip it
-                predicted_all_groups = False
+            # build the user's predicted table from the games they DID predict
+            rows = []
+            for mm in gms:
+                up = pred_by.get((uid, mm['id']))
+                if up:
+                    rows.append((mm['home_team'], mm['away_team'],
+                                 up['pred_home'], up['pred_away']))
+            if not rows:
                 continue
-            pst = _standings([(mm['home_team'], mm['away_team'],
-                               up['pred_home'], up['pred_away'])
-                              for mm, up in zip(gms, ups)])
-            # group winner / runner-up bonus (only if the real group is decided)
-            if g in real_table:
-                rst = real_table[g]
-                if pst and rst and pst[0][0] == rst[0][0]:
-                    bonus[uid] += GROUP_WINNER_BONUS
-                if len(pst) >= 2 and len(rst) >= 2 and pst[1][0] == rst[1][0]:
-                    bonus[uid] += GROUP_RUNNERUP_BONUS
-            for team, _ in pst[:2]:
-                user_quals.add(team)
-            if len(pst) >= 3:
-                third_picks.append((pst[2][0], pst[2][1]))
+            pst = _standings(rows)
 
-        # predicted best-8 thirds count only if user predicted ALL groups
-        if all_groups_done and predicted_all_groups and len(third_picks) >= 8:
+            off = group_official.get(g)
+            if off:
+                if pst and pst[0][0] == off['winner_team']:
+                    bonus[uid] += GROUP_WINNER_BONUS
+                if len(pst) >= 2 and pst[1][0] == off['runnerup_team']:
+                    bonus[uid] += GROUP_RUNNERUP_BONUS
+
+            if len(pst) >= 1: user_quals.add(pst[0][0])
+            if len(pst) >= 2: user_quals.add(pst[1][0])
+            if len(pst) >= 3: third_picks.append((pst[2][0], pst[2][1]))
+
+        # the user's predicted best-8 third-placed teams (by pts -> gd -> gf)
+        if third_picks:
             best = sorted(third_picks, key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf']),
                           reverse=True)[:8]
             for team, _ in best:
                 user_quals.add(team)
 
-        # qualification bonus: +1 per correctly predicted qualifier
-        if real_quals:
-            bonus[uid] += QUALIFY_BONUS * len(user_quals & real_quals)
+        # +1 per team the user predicted to qualify that REALLY qualified
+        if official_quals:
+            bonus[uid] += QUALIFY_BONUS * len(user_quals & official_quals)
 
-    # ---- 4) MEDALS (pre-tournament picks) -----------------------------------
-    gold = silver = bronze = None
-    fin = next((m for m in matches if m['stage'] == 'final' and m['id'] in finished), None)
-    if fin:
-        if fin['home_score'] > fin['away_score']:
-            gold, silver = fin['home_team'], fin['away_team']
-        elif fin['away_score'] > fin['home_score']:
-            gold, silver = fin['away_team'], fin['home_team']
-    thr = next((m for m in matches if m['stage'] == 'third' and m['id'] in finished), None)
-    if thr:
-        if thr['home_score'] > thr['away_score']:
-            bronze = thr['home_team']
-        elif thr['away_score'] > thr['home_score']:
-            bronze = thr['away_team']
-
+    # ---- 3) MEDALS (admin official) -----------------------------------------
     def same(a, b):
         return a and b and a.strip().lower() == b.strip().lower()
 
+    gold, silver, bronze = medal.get('gold'), medal.get('silver'), medal.get('bronze')
     for u in users:
-        if same(u.get('champion_pick'), gold):
-            bonus[u['id']] += MEDAL_GOLD
-        if same(u.get('runnerup_pick'), silver):
-            bonus[u['id']] += MEDAL_SILVER
-        if same(u.get('bronze_pick'), bronze):
-            bonus[u['id']] += MEDAL_BRONZE
+        if same(u.get('champion_pick'), gold):   bonus[u['id']] += MEDAL_GOLD
+        if same(u.get('runnerup_pick'), silver): bonus[u['id']] += MEDAL_SILVER
+        if same(u.get('bronze_pick'),  bronze):  bonus[u['id']] += MEDAL_BRONZE
 
-    # ---- 5) WRITE BACK -------------------------------------------------------
+    # ---- 4) WRITE BACK -------------------------------------------------------
     for chunk in _chunks(pred_updates):
         sb.table('predictions').upsert(chunk, on_conflict='user_id,match_id').execute()
 
@@ -221,4 +275,6 @@ def recalculate(sb):
     for chunk in _chunks(user_rows):
         sb.table('users').upsert(chunk).execute()
 
-    return f"Recalculated: {len(finished)} finished matches, {len(users)} users, {len(preds)} predictions."
+    return (f"Recalculated: {len(finished)} finished matches, {len(users)} users, "
+            f"{len(preds)} predictions, {len(group_official)} groups closed, "
+            f"{len(official_quals)} qualifiers.")

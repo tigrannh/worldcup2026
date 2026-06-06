@@ -24,8 +24,16 @@ def _secret(key, default=None):
 SUPABASE_URL = _secret("SUPABASE_URL")
 # Use the SERVICE ROLE key: it stays on the Streamlit server, never reaches the
 # browser, and bypasses RLS so the app works while the public stays locked out.
-SUPABASE_KEY = _secret("SUPABASE_SERVICE_ROLE_KEY") or _secret("SUPABASE_KEY")
+SUPABASE_SERVICE = _secret("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_KEY = SUPABASE_SERVICE or _secret("SUPABASE_KEY")
 ADMIN_EMAIL  = (_secret("ADMIN_EMAIL") or "tigran.hakobyan@ameriabank.am").lower()
+
+# Fail LOUD if the server isn't configured, instead of silently showing no data.
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("⚙️ Սերվերը կարգավորված չէ (SUPABASE_URL / SERVICE_ROLE_KEY բացակայում են)։")
+    st.stop()
+if not SUPABASE_SERVICE:
+    st.warning("⚠️ Աշխատում է հանրային բանալիով — տվյալները չեն երևա։ Անհրաժեշտ է SERVICE_ROLE բանալին։")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 STAGES = {
@@ -184,7 +192,8 @@ def login_ui():
         email = st.text_input("ԷԼ. ՓՈՍՏ", placeholder="name@ameriabank.am")
         password = st.text_input("ԳԱՂՏՆԱԲԱՌ", type="password")
         if st.button("ՄԻԱՆԱԼ ՀԱՄԱԿԱՐԳԻՆ"):
-            res = supabase.table("users").select("*").eq("email", email.strip()).execute()
+            # case-insensitive email match (ilike with no wildcards = exact, any case)
+            res = supabase.table("users").select("*").ilike("email", email.strip()).execute()
             if res.data and bcrypt.checkpw(password.encode('utf-8'),
                                            res.data[0]['password_hash'].encode('utf-8')):
                 if not res.data[0].get('is_active', True):
@@ -205,7 +214,13 @@ if 'logged_in' not in st.session_state:
     login_ui(); st.stop()
 
 # refresh the cached user row each run (so points/jokers stay current)
-user_data = supabase.table("users").select("*").eq("id", st.session_state['user']['id']).execute().data[0]
+_fresh = supabase.table("users").select("*").eq("id", st.session_state['user']['id']).execute().data
+if not _fresh:                       # account was removed mid-session -> log out cleanly
+    for k in ('logged_in', 'user', 'page'):
+        st.session_state.pop(k, None)
+    st.warning("Ձեր հաշիվը այլևս հասանելի չէ։ Մուտք գործեք կրկին։")
+    st.stop()
+user_data = _fresh[0]
 st.session_state['user'] = user_data
 is_admin = (user_data.get('email', '').lower() == ADMIN_EMAIL)
 
@@ -332,6 +347,10 @@ elif page == "ԱՂՅՈՒՍԱԿ":
             df[c] = 0
         df[c] = df[c].fillna(0).astype(int)
     df['name'] = df.apply(lambda r: (r.get('display_name') or r.get('username') or ""), axis=1)
+    # the SQL already sorted by points (then exact count) -> position IS the rank,
+    # which is correct even if two people share the same display name
+    df = df.reset_index(drop=True)
+    df['rank'] = df.index + 1
     total = len(df)
 
     GIFS = {
@@ -375,11 +394,11 @@ elif page == "ԱՂՅՈՒՍԱԿ":
 
     st.divider()
     search = st.text_input("🔍 Փնտրել գործընկերոջը...", placeholder="Անուն...")
-    view = df[df['name'].str.contains(search, case=False, na=False)] if search else df
+    # regex=False so names with special characters (or a stray "(") can't crash search
+    view = df[df['name'].str.contains(search, case=False, na=False, regex=False)] if search else df
 
-    for pos, (_, row) in enumerate(view.iterrows()):
-        idx = df.index[df['name'] == row['name']].tolist()
-        rank = (idx[0] + 1) if idx else pos + 1
+    for _, row in view.iterrows():
+        rank = int(row['rank'])
         nm, pts = row['name'].upper(), row['total_points']
         ex, di, ou, wr = row['exact_scores_count'], row['diff_count'], row['outcome_count'], row['wrong_count']
         bo = row.get('bonus_points', 0)
@@ -473,11 +492,27 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
                     if now_utc() >= parse_dt(m['lock_time']):
                         st.error("🔒 Ուշացաք — խաղը փակվեց։")
                     else:
+                        # re-read the DB right now so two tabs/devices can't both
+                        # spend the same-stage joker, and can't double-predict.
+                        fresh = supabase.table("predictions").select(
+                            "match_id, use_joker").eq("user_id", user_data['id']).execute().data or []
+                        if any(fp['match_id'] == m['id'] for fp in fresh):
+                            st.error("Արդեն կանխատեսված է։")
+                            st.rerun()
+                        used_stage_now = set()
+                        for fp in fresh:
+                            if fp.get('use_joker'):
+                                fm = next((mm for mm in matches if mm['id'] == fp['match_id']), None)
+                                if fm:
+                                    used_stage_now.add(fm['stage'])
+                        joker_ok = bool(use_jk and can_joker and stage not in used_stage_now)
+                        if use_jk and not joker_ok:
+                            st.warning("🃏 Այս փուլի ջոկերն արդեն օգտագործված է — կպահվի առանց ջոկերի։")
                         try:
                             supabase.table("predictions").insert({
                                 "user_id": user_data['id'], "match_id": m['id'],
                                 "pred_home": int(h), "pred_away": int(a),
-                                "use_joker": bool(use_jk and can_joker)}).execute()
+                                "use_joker": joker_ok}).execute()
                             st.toast("✅ Ընդունված է և կողպված։")
                             st.rerun()
                         except Exception:
@@ -524,39 +559,56 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
 # ===================  PAGE: MEDALS  ==========================================
 elif page == "ՄԵԴԱԼՆԵՐ":
     st.title("🥇 ՄԵԴԱԼՆԵՐԻ ԿԱՆԽԱՏԵՍՈՒՄ")
-    matches = supabase.table("matches").select("kickoff_time").order("kickoff_time").execute().data or []
-    deadline_passed = bool(matches) and now_utc() >= parse_dt(matches[0]['kickoff_time'])
+    # deadline is the one the ADMIN sets (settings.medal_deadline)
+    _settings = supabase.table("settings").select("medal_deadline").execute().data or []
+    medal_deadline = _settings[0].get('medal_deadline') if _settings else None
+    deadline_passed = bool(medal_deadline) and now_utc() >= parse_dt(medal_deadline)
     already_set = bool(user_data.get('champion_pick'))   # one-time: once saved -> locked
     locked = already_set or deadline_passed
 
     st.markdown('<div class="glass-card"><p style="color:#FFFFFF; font-size:1.05rem;">'
                 'Ընտրիր մրցաշարի <b>Չեմպիոնին (Ոսկի +30)</b>, <b>Ֆինալիստին (Արծաթ +18)</b> և '
-                '<b>Բրոնզե մեդալակիրին (+12)</b>։ <b>Ուշադրություն՝ ընտրությունը մեկանգամյա է</b> — '
+                '<b>Բրոնզե մեդալակիրին (+12)</b>։ <b>Երեքն էլ պետք է տարբեր թիմեր լինեն։</b> '
+                '<b>Ուշադրություն՝ ընտրությունը մեկանգամյա է</b> — '
                 'պահպանելուց հետո այլևս հնարավոր չէ փոխել։</p></div>', unsafe_allow_html=True)
+    if medal_deadline and not locked:
+        st.caption(f"⏱️ Վերջնաժամկետ՝ {to_yerevan(parse_dt(medal_deadline)).strftime('%d.%m %H:%M')} (Երևան)")
 
     if locked:
         if already_set:
             st.success("✅ Ձեր ընտրությունը գրանցված է և կողպված է (մեկանգամյա)։")
         else:
-            st.warning("🔒 Ընտրությունը փակ է — մրցաշարն արդեն մեկնարկել է։")
+            st.warning("🔒 Ընտրությունը փակ է — վերջնաժամկետն անցել է։")
         st.markdown(f"🥇 **Ոսկի՝** {user_data.get('champion_pick') or '—'}")
         st.markdown(f"🥈 **Արծաթ՝** {user_data.get('runnerup_pick') or '—'}")
         st.markdown(f"🥉 **Բրոնզ՝** {user_data.get('bronze_pick') or '—'}")
     else:
-        opts = ["— ընտրիր —"] + COUNTRIES
-        gold = st.selectbox("🥇 Չեմպիոն (Ոսկի)", opts)
-        silver = st.selectbox("🥈 Ֆինալիստ (Արծաթ)", opts)
-        bronze = st.selectbox("🥉 Բրոնզ", opts)
+        BLANK = "— ընտրիր —"
+        # each dropdown hides the teams already chosen above it -> 3 always differ
+        gold = st.selectbox("🥇 Չեմպիոն (Ոսկի)", [BLANK] + COUNTRIES, key="medal_gold")
+        silver = st.selectbox("🥈 Ֆինալիստ (Արծաթ)",
+                              [BLANK] + [c for c in COUNTRIES if c != gold], key="medal_silver")
+        bronze = st.selectbox("🥉 Բրոնզ",
+                              [BLANK] + [c for c in COUNTRIES if c not in (gold, silver)], key="medal_bronze")
         st.caption("⚠️ Պահպանելուց հետո ընտրությունը կկողպվի ընդմիշտ։")
         if st.button("💾 ՊԱՀՊԱՆԵԼ ԵՎ ԿՈՂՊԵԼ"):
-            if gold in COUNTRIES and silver in COUNTRIES and bronze in COUNTRIES:
+            picks = [gold, silver, bronze]
+            if not all(p in COUNTRIES for p in picks):
+                st.error("Ընտրիր բոլոր երեքը (Ոսկի, Արծաթ, Բրոնզ)։")
+            elif len(set(picks)) != 3:
+                st.error("Երեքն էլ պետք է տարբեր թիմեր լինեն։")
+            else:
+                # re-read the DB so a double-click / two tabs can't overwrite a saved pick
+                fresh = supabase.table("users").select("champion_pick").eq(
+                    "id", user_data['id']).execute().data
+                if fresh and fresh[0].get('champion_pick'):
+                    st.warning("Ձեր ընտրությունն արդեն պահպանված է։")
+                    st.rerun()
                 supabase.table("users").update({
                     "champion_pick": gold, "runnerup_pick": silver, "bronze_pick": bronze,
                 }).eq("id", user_data['id']).execute()
                 st.success("✅ Պահպանված և կողպված է։")
                 st.rerun()
-            else:
-                st.error("Ընտրիր բոլոր երեքը (Ոսկի, Արծաթ, Բրոնզ)։")
 
 
 # ===================  PAGE: MY RESULTS  ======================================
@@ -643,8 +695,9 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
 # ===================  PAGE: ADMIN  ===========================================
 elif page == "ԱԴՄԻՆ" and is_admin:
     st.title("⚡ ՀԱՄԱԿԱՐԳԻ ԿԱՌԱՎԱՐՈՒՄ")
-    tab_open, tab_results, tab_fix, tab_users = st.tabs(
-        ["➕ ԲԱՑԵԼ ԽԱՂԵՐ", "📝 ՄՈՒՏՔԱԳՐԵԼ ԱՐԴՅՈՒՆՔ", "✏️ ՈՒՂՂԵԼ", "👥 ՄԱՍՆԱԿԻՑՆԵՐ"])
+    tab_open, tab_results, tab_fix, tab_official, tab_users = st.tabs(
+        ["➕ ԲԱՑԵԼ ԽԱՂԵՐ", "📝 ՄՈՒՏՔԱԳՐԵԼ ԱՐԴՅՈՒՆՔ", "✏️ ՈՒՂՂԵԼ",
+         "🏁 ՊԱՇՏՈՆԱԿԱՆ ԱՐԴՅՈՒՆՔ", "👥 ՄԱՍՆԱԿԻՑՆԵՐ"])
 
     # ---- Tab 1: open new matches -------------------------------------------
     with tab_open:
@@ -687,13 +740,23 @@ elif page == "ԱԴՄԻՆ" and is_admin:
             opts = {f"{m['home_team']} vs {m['away_team']} ({STAGES[m['stage']]})": m for m in unfinished}
             sel = st.selectbox("Ընտրիր խաղը", list(opts.keys()))
             m = opts[sel]
+            st.caption("⏱️ Մուտքագրիր 90 րոպեի (+ փոխհատուցման) հաշիվը։ Այս հաշիվով են "
+                       "հաշվարկվում կանխատեսման միավորները։")
             c1, c2 = st.columns(2)
             hs = c1.number_input(f"{m['home_team']}", min_value=0, step=1, key="rh")
             as_ = c2.number_input(f"{m['away_team']}", min_value=0, step=1, key="ra")
+            knockout = m['stage'] != 'group'
+            winner = "—"
+            if knockout:
+                st.caption("🏆 Նոկ-աութ խաղ․ նշիր ով անցավ հաջորդ փուլ "
+                           "(լրաց. ժամանակ/պենալտիից հետո)։ Միավորների հաշվարկը մնում է 90 րոպեով։")
+                winner = st.selectbox("Ով անցավ հաջորդ փուլ",
+                                      ["—", m['home_team'], m['away_team']], key="rwin")
             if st.button("🔥 ՀԱՍՏԱՏԵԼ ԵՎ ՎԵՐԱՀԱՇՎԱՐԿԵԼ"):
-                supabase.table("matches").update({
-                    "home_score": int(hs), "away_score": int(as_), "status": "finished"
-                }).eq("id", m['id']).execute()
+                upd = {"home_score": int(hs), "away_score": int(as_), "status": "finished"}
+                if knockout and winner in (m['home_team'], m['away_team']):
+                    upd["winner_team"] = winner
+                supabase.table("matches").update(upd).eq("id", m['id']).execute()
                 with st.spinner("Վերահաշվարկ..."):
                     msg = scoring.recalculate(supabase)
                 st.success(f"✅ {m['home_team']} {hs}:{as_} {m['away_team']} — {msg}")
@@ -706,30 +769,159 @@ elif page == "ԱԴՄԻՆ" and is_admin:
             opts = {f"#{m['id']} {m['home_team']} vs {m['away_team']}": m for m in allm}
             sel = st.selectbox("Ընտրիր խաղը", list(opts.keys()), key="fixsel")
             m = opts[sel]
+            # if anyone already predicted this game, the TEAMS are locked — changing
+            # them would silently re-interpret every existing prediction.
+            pred_cnt = supabase.table("predictions").select("id", count="exact").eq(
+                "match_id", m['id']).execute().count or 0
+            has_preds = pred_cnt > 0
+
             c1, c2 = st.columns(2)
-            home = c1.text_input("Տանտեր", value=m['home_team'])
-            away = c2.text_input("Հյուր", value=m['away_team'])
+            if has_preds:
+                c1.markdown(f"**Տանտեր՝** {m['home_team']}")
+                c2.markdown(f"**Հյուր՝** {m['away_team']}")
+                home, away = m['home_team'], m['away_team']
+                st.caption(f"🔒 Թիմերը կողպված են — այս խաղն ունի {pred_cnt} կանխատեսում։ "
+                           "Թիմը փոխելը կխեղաթյուրեր մասնակիցների կանխատեսումները։ "
+                           "Սխալ թիմերի դեպքում՝ ջնջիր ու նորից բացիր խաղը։")
+            else:
+                hi = COUNTRIES.index(m['home_team']) if m['home_team'] in COUNTRIES else 0
+                ai = COUNTRIES.index(m['away_team']) if m['away_team'] in COUNTRIES else 0
+                home = c1.selectbox("Տանտեր", COUNTRIES, index=hi, key="fixhome")
+                away = c2.selectbox("Հյուր", COUNTRIES, index=ai, key="fixaway")
+
             cur_ko = to_yerevan(parse_dt(m['kickoff_time']))
             d1, d2 = st.columns(2)
             kdate = d1.date_input("📅 Փակման ամսաթիվ (Երևան)", value=cur_ko.date(), key="fixdate")
             ktime = d2.time_input("🕓 Փակման ժամ (Երևան)", value=cur_ko.time(), key="fixtime")
             c3, c4 = st.columns(2)
-            hs = c3.number_input("Հաշիվ (տանտեր)", min_value=0, step=1, value=m.get('home_score') or 0)
-            as_ = c4.number_input("Հաշիվ (հյուր)", min_value=0, step=1, value=m.get('away_score') or 0)
+            hs = c3.number_input("Հաշիվ (տանտեր, 90 րոպե)", min_value=0, step=1, value=m.get('home_score') or 0)
+            as_ = c4.number_input("Հաշիվ (հյուր, 90 րոպե)", min_value=0, step=1, value=m.get('away_score') or 0)
             status = st.selectbox("Կարգավիճակ", ["scheduled", "finished"],
                                   index=["scheduled", "finished"].index(m['status']))
+            winner = "—"
+            if m['stage'] != 'group':
+                wopts = ["—", home, away]
+                wcur = m.get('winner_team')
+                widx = wopts.index(wcur) if wcur in wopts else 0
+                winner = st.selectbox("🏆 Ով անցավ հաջորդ փուլ", wopts, index=widx, key="fixwin")
             if st.button("💾 ՊԱՀՊԱՆԵԼ ՈՒՂՂՈՒՄԸ"):
-                ko_iso = YEREVAN.localize(datetime.combine(kdate, ktime)).astimezone(pytz.UTC).isoformat()
-                upd = {"home_team": home.strip(), "away_team": away.strip(), "status": status,
-                       "kickoff_time": ko_iso, "lock_time": ko_iso}
-                if status == "finished":
-                    upd["home_score"], upd["away_score"] = int(hs), int(as_)
-                supabase.table("matches").update(upd).eq("id", m['id']).execute()
+                if (not has_preds) and (home == away):
+                    st.error("Տանտերն ու հյուրը պետք է տարբեր թիմեր լինեն։")
+                else:
+                    ko_iso = YEREVAN.localize(datetime.combine(kdate, ktime)).astimezone(pytz.UTC).isoformat()
+                    upd = {"status": status, "kickoff_time": ko_iso, "lock_time": ko_iso}
+                    if not has_preds:                      # teams only changeable pre-predictions
+                        upd["home_team"], upd["away_team"] = home, away
+                    if status == "finished":
+                        upd["home_score"], upd["away_score"] = int(hs), int(as_)
+                    if m['stage'] != 'group':
+                        upd["winner_team"] = winner if winner in (home, away) else None
+                    supabase.table("matches").update(upd).eq("id", m['id']).execute()
+                    with st.spinner("Վերահաշվարկ..."):
+                        msg = scoring.recalculate(supabase)
+                    st.success(f"✅ Ուղղված է — {msg}")
+
+    # ---- Tab 4: OFFICIAL results -> bonus points ---------------------------
+    with tab_official:
+        st.subheader("Պաշտոնական արդյունքներ → բոնուս միավորներ")
+        st.caption("Բոնուսները հաշվարկվում են ՄԻԱՅՆ այստեղ մուտքագրածից։ "
+                   "Քանի դեռ չես լրացրել՝ բոլորի բոնուսը 0 է։")
+
+        # --- medal-pick deadline ---
+        with st.expander("⏱️ Մեդալների ընտրության վերջնաժամկետ"):
+            _s = supabase.table("settings").select("*").execute().data or []
+            cur_dl = _s[0].get('medal_deadline') if _s else None
+            if cur_dl:
+                st.caption(f"Ընթացիկ՝ {to_yerevan(parse_dt(cur_dl)).strftime('%d.%m %H:%M')} (Երևան)")
+            dd1, dd2 = st.columns(2)
+            mdate = dd1.date_input("📅 Ամսաթիվ (Երևան)", key="mdldate")
+            mtime = dd2.time_input("🕓 Ժամ (Երևան)", key="mdltime")
+            if st.button("💾 Պահպանել վերջնաժամկետը"):
+                iso = YEREVAN.localize(datetime.combine(mdate, mtime)).astimezone(pytz.UTC).isoformat()
+                supabase.table("settings").upsert({"id": 1, "medal_deadline": iso}).execute()
+                st.success("✅ Պահպանված է։")
+                st.rerun()
+
+        # --- per-group official winner / runner-up ---
+        gmatches = supabase.table("matches").select(
+            "home_team,away_team,group_name").eq("stage", "group").execute().data or []
+        gteams = {}
+        for mm in gmatches:
+            if mm.get('group_name'):
+                s = gteams.setdefault(mm['group_name'], set())
+                s.add(mm['home_team']); s.add(mm['away_team'])
+        official = {r['group_name']: r for r in
+                    (supabase.table("group_official").select("*").execute().data or [])}
+
+        st.markdown("### 📦 Խմբերի պաշտոնական արդյունք")
+        if not gteams:
+            st.info("Դեռ խմբային խաղեր չկան։")
+        else:
+            for g in sorted(gteams):
+                teams = sorted(gteams[g])
+                cur = official.get(g, {})
+                with st.container(border=True):
+                    st.markdown(f"**Խումբ {g}**" + (
+                        f" — ✅ {cur.get('winner_team')} / {cur.get('runnerup_team')}" if cur else ""))
+                    wc, rc = st.columns(2)
+                    wi = teams.index(cur['winner_team']) + 1 if cur.get('winner_team') in teams else 0
+                    ri = teams.index(cur['runnerup_team']) + 1 if cur.get('runnerup_team') in teams else 0
+                    win = wc.selectbox("1-ին (հաղթող)", ["—"] + teams, index=wi, key=f"gw_{g}")
+                    run = rc.selectbox("2-րդ", ["—"] + teams, index=ri, key=f"gr_{g}")
+                    if st.button(f"💾 Պահպանել Խումբ {g}", key=f"gsave_{g}"):
+                        if win in teams and run in teams and win != run:
+                            supabase.table("group_official").upsert({
+                                "group_name": g, "winner_team": win, "runnerup_team": run}).execute()
+                            with st.spinner("Վերահաշվարկ..."):
+                                msg = scoring.recalculate(supabase)
+                            st.success(f"✅ Խումբ {g} — {msg}")
+                            st.rerun()
+                        else:
+                            st.error("Ընտրիր երկու տարբեր թիմ։")
+
+        # --- qualifiers (the 32 that reached the Round of 32) ---
+        st.markdown("### ✅ Անցած թիմերը (1/16-ի փուլ)")
+        all_teams = sorted({t for s in gteams.values() for t in s}) or COUNTRIES
+        cur_quals = [r['team_name'] for r in
+                     (supabase.table("qualifiers").select("team_name").execute().data or [])]
+        picked = st.multiselect("Ընտրիր անցած թիմերը (մինչև 32)", all_teams,
+                                default=[t for t in cur_quals if t in all_teams], key="qmulti")
+        st.caption(f"Ընտրված՝ {len(picked)} թիմ")
+        if st.button("💾 Պահպանել անցած թիմերը և վերահաշվարկել"):
+            supabase.table("qualifiers").delete().neq("team_name", "").execute()
+            if picked:
+                supabase.table("qualifiers").upsert([{"team_name": t} for t in picked]).execute()
+            with st.spinner("Վերահաշվարկ..."):
+                msg = scoring.recalculate(supabase)
+            st.success(f"✅ {len(picked)} թիմ պահպանված — {msg}")
+
+        # --- official medals (Gold/Silver/Bronze) ---
+        st.markdown("### 🥇 Պաշտոնական մեդալներ")
+        st.caption("Մուտքագրելը գործարկում է մեդալների բոնուսը (Ոսկի +30, Արծաթ +18, Բրոնզ +12)։")
+        tr = supabase.table("tournament_result").select("*").execute().data or []
+        cur_m = tr[0] if tr else {}
+        mo = ["—"] + COUNTRIES
+        gi = mo.index(cur_m['gold']) if cur_m.get('gold') in COUNTRIES else 0
+        si = mo.index(cur_m['silver']) if cur_m.get('silver') in COUNTRIES else 0
+        bi = mo.index(cur_m['bronze']) if cur_m.get('bronze') in COUNTRIES else 0
+        gold = st.selectbox("🥇 Ոսկի (չեմպիոն)", mo, index=gi, key="ogold")
+        silver = st.selectbox("🥈 Արծաթ (ֆինալիստ)", mo, index=si, key="osilver")
+        bronze = st.selectbox("🥉 Բրոնզ (3-րդ տեղ)", mo, index=bi, key="obronze")
+        if st.button("💾 Պահպանել մեդալները և վերահաշվարկել"):
+            picks = [p for p in (gold, silver, bronze) if p in COUNTRIES]
+            if len(set(picks)) != len(picks):
+                st.error("Մեդալների թիմերը պետք է տարբեր լինեն։")
+            else:
+                supabase.table("tournament_result").upsert({
+                    "id": 1,
+                    "gold":   gold   if gold   in COUNTRIES else None,
+                    "silver": silver if silver in COUNTRIES else None,
+                    "bronze": bronze if bronze in COUNTRIES else None}).execute()
                 with st.spinner("Վերահաշվարկ..."):
                     msg = scoring.recalculate(supabase)
-                st.success(f"✅ Ուղղված է — {msg}")
+                st.success(f"✅ Մեդալները պահպանված — {msg}")
 
-    # ---- Tab 4: activate / deactivate participants -------------------------
+    # ---- Tab 5: activate / deactivate participants -------------------------
     with tab_users:
         st.subheader("Միացնել / Անջատել մասնակցին")
         st.caption("Անջատված մասնակիցը չի երևում աղյուսակում և չի կարող մուտք գործել։")

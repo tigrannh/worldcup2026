@@ -192,8 +192,10 @@ def login_ui():
         email = st.text_input("ԷԼ. ՓՈՍՏ", placeholder="name@ameriabank.am")
         password = st.text_input("ԳԱՂՏՆԱԲԱՌ", type="password")
         if st.button("ՄԻԱՆԱԼ ՀԱՄԱԿԱՐԳԻՆ"):
-            # case-insensitive email match (ilike with no wildcards = exact, any case)
-            res = supabase.table("users").select("*").ilike("email", email.strip()).execute()
+            # case-insensitive email match; escape LIKE metacharacters (_ and %)
+            # so an address like "a_b@x.am" can't act as a wildcard pattern.
+            safe_email = email.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            res = supabase.table("users").select("*").ilike("email", safe_email).execute()
             if res.data and bcrypt.checkpw(password.encode('utf-8'),
                                            res.data[0]['password_hash'].encode('utf-8')):
                 if not res.data[0].get('is_active', True):
@@ -446,7 +448,6 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
     matches = supabase.table("matches").select("*").order("kickoff_time").execute().data or []
     my_preds = supabase.table("predictions").select("*").eq("user_id", user_data['id']).execute().data or []
     pred_by_match = {p['match_id']: p for p in my_preds}
-    jokers_used = {p['match_id'] for p in my_preds if p.get('use_joker')}
     joker_used_stage = set()
     for p in my_preds:
         if p.get('use_joker'):
@@ -489,7 +490,11 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
                 can_joker = stage in JOKER_STAGES and stage not in joker_used_stage
                 use_jk = st.checkbox("🃏 ՋՈԿԵՐ (×2)", key=f"jk_{m['id']}", disabled=not can_joker)
                 if st.button("ՀԱՍՏԱՏԵԼ", key=f"btn_{m['id']}"):
-                    if now_utc() >= parse_dt(m['lock_time']):
+                    # re-read this match NOW (page may be stale): refuse if locked or finished
+                    mnow = supabase.table("matches").select(
+                        "status, lock_time").eq("id", m['id']).execute().data
+                    if (not mnow) or mnow[0]['status'] == 'finished' or \
+                       now_utc() >= parse_dt(mnow[0]['lock_time']):
                         st.error("🔒 Ուշացաք — խաղը փակվեց։")
                     else:
                         # re-read the DB right now so two tabs/devices can't both
@@ -584,12 +589,15 @@ elif page == "ՄԵԴԱԼՆԵՐ":
         st.markdown(f"🥉 **Բրոնզ՝** {user_data.get('bronze_pick') or '—'}")
     else:
         BLANK = "— ընտրիր —"
-        # each dropdown hides the teams already chosen above it -> 3 always differ
-        gold = st.selectbox("🥇 Չեմպիոն (Ոսկի)", [BLANK] + COUNTRIES, key="medal_gold")
-        silver = st.selectbox("🥈 Ֆինալիստ (Արծաթ)",
-                              [BLANK] + [c for c in COUNTRIES if c != gold], key="medal_silver")
-        bronze = st.selectbox("🥉 Բրոնզ",
-                              [BLANK] + [c for c in COUNTRIES if c not in (gold, silver)], key="medal_bronze")
+        # full list in all three (stable, never resets); duplicates are blocked below
+        opts = [BLANK] + COUNTRIES
+        gold = st.selectbox("🥇 Չեմպիոն (Ոսկի)", opts, key="medal_gold")
+        silver = st.selectbox("🥈 Ֆինալիստ (Արծաթ)", opts, key="medal_silver")
+        bronze = st.selectbox("🥉 Բրոնզ", opts, key="medal_bronze")
+        chosen = [x for x in (gold, silver, bronze) if x in COUNTRIES]
+        dup = len(chosen) != len(set(chosen))
+        if dup:
+            st.warning("⚠️ Երեք մեդալների համար ընտրիր ՏԱՐԲԵՐ թիմեր։")
         st.caption("⚠️ Պահպանելուց հետո ընտրությունը կկողպվի ընդմիշտ։")
         if st.button("💾 ՊԱՀՊԱՆԵԼ ԵՎ ԿՈՂՊԵԼ"):
             picks = [gold, silver, bronze]
@@ -749,7 +757,8 @@ elif page == "ԱԴՄԻՆ" and is_admin:
             winner = "—"
             if knockout:
                 st.caption("🏆 Նոկ-աութ խաղ․ նշիր ով անցավ հաջորդ փուլ "
-                           "(լրաց. ժամանակ/պենալտիից հետո)։ Միավորների հաշվարկը մնում է 90 րոպեով։")
+                           "(լրաց. ժամանակ/պենալտիից հետո)։ Միավորների հաշվարկը մնում է 90 րոպեով։ "
+                           "ℹ️ Սա տեղեկատվական է — մեդալները շնորհվում են «🏁 Պաշտոնական արդյունք» բաժնում։")
                 winner = st.selectbox("Ով անցավ հաջորդ փուլ",
                                       ["—", m['home_team'], m['away_team']], key="rwin")
             if st.button("🔥 ՀԱՍՏԱՏԵԼ ԵՎ ՎԵՐԱՀԱՇՎԱՐԿԵԼ"):

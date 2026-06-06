@@ -264,7 +264,14 @@ def recalculate(sb):
     for chunk in _chunks(pred_updates):
         sb.table('predictions').upsert(chunk, on_conflict='user_id,match_id').execute()
 
-    user_rows = [{**u,
+    # Write back ONLY the computed columns (+ the NOT NULL columns the upsert's
+    # insert-path needs). We deliberately OMIT user-owned mutable columns
+    # (champion_pick/runnerup_pick/bronze_pick, is_active, display_name): upsert
+    # leaves columns it isn't given untouched, so a medal pick or an is_active
+    # toggle made concurrently with a recalc can't be clobbered.
+    user_rows = [{'id': u['id'],
+                  'username': u['username'], 'email': u['email'],
+                  'password_hash': u['password_hash'],
                   'total_points': pts[u['id']] + bonus[u['id']],
                   'bonus_points': bonus[u['id']],
                   'exact_scores_count': exact[u['id']],

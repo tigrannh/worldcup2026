@@ -163,12 +163,19 @@ def disp_name(u):
 # --- LANDING -----------------------------------------------------------------
 def landing_page():
     st.markdown("""
-        <div style="padding-top: 40px; text-align:center;">
+        <style>
+        /* Full-screen Waka Waka GIF background for the landing page only */
+        .stApp {
+            background:
+                linear-gradient(rgba(15,12,41,0.72), rgba(36,36,62,0.88)),
+                url('https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExMThzamU3emJkaGZyZmd5NDFsOGhkbjZ4bzgyNzJlM3pyc2luN3NjaSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/gLWTWCg96RA0btDUm0/giphy.gif')
+                center center / cover no-repeat fixed !important;
+        }
+        </style>
+        <div style="padding-top: 60px; padding-bottom: 40px; text-align:center;">
             <h1 style="font-size:5rem; margin-bottom:0; text-shadow:0 0 20px #FFD700;">Ցամինա Մինա Է Է!</h1>
             <h1 style="font-size:4rem; margin-top:0; color:#FFD700 !important; text-shadow:0 0 30px #FFD700;">Վակա Վակա Է Է!</h1>
-            <p style="font-family:'Orbitron'; font-size:1.4rem; letter-spacing:4px; color:#00ff88;">🇦🇲 ԱՄԵՐԻԱԲԱՆԿ ԿԱՆԽԱՏԵՍՈՒՄՆԵՐԻ ԱՐԵՆԱ 2026 🇦🇲</p>
-            <br>
-            <img src="https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExMThzamU3emJkaGZyZmd5NDFsOGhkbjZ4bzgyNzJlM3pyc2luN3NjaSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/gLWTWCg96RA0btDUm0/giphy.gif" style="width:500px; max-width:90%; border-radius:20px; border:3px solid #00ff88; box-shadow:0 0 30px #00ff88;">
+            <p style="font-family:'Orbitron'; font-size:1.4rem; letter-spacing:4px; color:#00ff88; text-shadow:0 0 12px #000;">🇦🇲 ԱՄԵՐԻԱԲԱՆԿ ԿԱՆԽԱՏԵՍՈՒՄՆԵՐԻ ԱՐԵՆԱ 2026 🇦🇲</p>
             <br><br>
             <div style="max-width:700px; margin:0 auto; padding:30px; border:2px solid #00ff88;" class="glass-card">
                 <h2 style="color:white !important;">ՊԱՏՐԱ՞ՍՏ ԵՔ ՀԱՂԹԱՆԱԿԻ</h2>

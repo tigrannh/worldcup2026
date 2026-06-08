@@ -491,7 +491,7 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
         st.markdown('<div class="glass-card" style="padding:12px; margin-bottom:8px;">', unsafe_allow_html=True)
         st.markdown(
             f"<div style='text-align:center; color:#00d4ff; font-weight:700; font-size:0.85rem;'>"
-            f"🗓️ {to_yerevan(parse_dt(m['kickoff_time'])).strftime('%d.%m  %H:%M')} (Երևան)</div>",
+            f"🔒 Վերջնաժամկետ՝ {to_yerevan(lock).strftime('%d.%m  %H:%M')} (Երևան)</div>",
             unsafe_allow_html=True)
         c1, c2, c3 = st.columns([2, 1.3, 2])
         with c1: st.markdown(f"<div class='team-box'>{m['home_team']}</div>", unsafe_allow_html=True)

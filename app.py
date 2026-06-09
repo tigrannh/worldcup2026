@@ -516,8 +516,8 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
             f"🔒 Վերջնաժամկետ՝ {to_yerevan(lock).strftime('%d.%m  %H:%M')} (Երևան)</div>",
             unsafe_allow_html=True)
         c1, c2, c3 = st.columns([2, 1.3, 2])
-        with c1: st.markdown(f"<div class='team-box'>🏠 {flag(m['home_team'])}{m['home_team']}</div>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<div class='team-box'>✈️ {flag(m['away_team'])}{m['away_team']}</div>", unsafe_allow_html=True)
+        with c1: st.markdown(f"<div class='team-box'>{flag(m['home_team'])}{m['home_team']}</div>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<div class='team-box'>{flag(m['away_team'])}{m['away_team']}</div>", unsafe_allow_html=True)
         if existing:                       # immutable — already predicted
             with c2:
                 jk = " 🃏" if existing.get('use_joker') else ""
@@ -530,8 +530,8 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
                 st.markdown("<div style='text-align:center; font-size:1.6rem;'>🔒</div>", unsafe_allow_html=True)
         else:
             with c2:
-                h = st.number_input(f"🏠 {m['home_team']}", min_value=0, step=1, key=f"h_{m['id']}")
-                a = st.number_input(f"✈️ {m['away_team']}", min_value=0, step=1, key=f"a_{m['id']}")
+                h = st.number_input(f"{flag(m['home_team'])}{m['home_team']}", min_value=0, step=1, key=f"h_{m['id']}")
+                a = st.number_input(f"{flag(m['away_team'])}{m['away_team']}", min_value=0, step=1, key=f"a_{m['id']}")
                 can_joker = stage in JOKER_STAGES and stage not in joker_used_stage
                 use_jk = st.checkbox("🃏 ՋՈԿԵՐ (×2)", key=f"jk_{m['id']}", disabled=not can_joker)
                 if st.button("ՀԱՍՏԱՏԵԼ", key=f"btn_{m['id']}"):

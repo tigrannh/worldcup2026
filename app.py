@@ -60,6 +60,28 @@ COUNTRIES = sorted([
     "Թունիս", "Թուրքիա", "ԱՄՆ", "Ուրուգվայ", "Ուզբեկստան",
 ])
 
+# Flag emoji per country (display-only, predictions page). If a name is
+# missing here the team name still shows with no flag — nothing breaks.
+FLAGS = {
+    "Ալժիր": "🇩🇿", "Արգենտինա": "🇦🇷", "Ավստրալիա": "🇦🇺", "Ավստրիա": "🇦🇹",
+    "Բելգիա": "🇧🇪", "Բոսնիա և Հերցեգովինա": "🇧🇦", "Բրազիլիա": "🇧🇷",
+    "Կաբո Վերդե": "🇨🇻", "Կանադա": "🇨🇦", "Կոլումբիա": "🇨🇴", "Կոնգո ԴՀ": "🇨🇩",
+    "Կոտ դ’Իվուար": "🇨🇮", "Խորվաթիա": "🇭🇷", "Կյուրասաո": "🇨🇼", "Չեխիա": "🇨🇿",
+    "Էկվադոր": "🇪🇨", "Եգիպտոս": "🇪🇬", "Անգլիա": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "Ֆրանսիա": "🇫🇷",
+    "Գերմանիա": "🇩🇪", "Գանա": "🇬🇭", "Հաիթի": "🇭🇹", "Իրան": "🇮🇷", "Իրաք": "🇮🇶",
+    "Ճապոնիա": "🇯🇵", "Հորդանան": "🇯🇴", "Հարավային Կորեա": "🇰🇷", "Մեքսիկա": "🇲🇽",
+    "Մարոկկո": "🇲🇦", "Նիդեռլանդներ": "🇳🇱", "Նոր Զելանդիա": "🇳🇿", "Նորվեգիա": "🇳🇴",
+    "Պանամա": "🇵🇦", "Պարագվայ": "🇵🇾", "Պորտուգալիա": "🇵🇹", "Կատար": "🇶🇦",
+    "Սաուդյան Արաբիա": "🇸🇦", "Շոտլանդիա": "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "Սենեգալ": "🇸🇳",
+    "Հարավային Աֆրիկա": "🇿🇦", "Իսպանիա": "🇪🇸", "Շվեդիա": "🇸🇪", "Շվեյցարիա": "🇨🇭",
+    "Թունիս": "🇹🇳", "Թուրքիա": "🇹🇷", "ԱՄՆ": "🇺🇸", "Ուրուգվայ": "🇺🇾",
+    "Ուզբեկստան": "🇺🇿",
+}
+
+def flag(name):
+    f = FLAGS.get(name, "")
+    return f + " " if f else ""
+
 st.set_page_config(page_title="WC2026 Arena | Ameriabank", page_icon="🏆", layout="wide")
 
 # --- CINEMATIC + READABLE CSS ------------------------------------------------
@@ -494,8 +516,8 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
             f"🔒 Վերջնաժամկետ՝ {to_yerevan(lock).strftime('%d.%m  %H:%M')} (Երևան)</div>",
             unsafe_allow_html=True)
         c1, c2, c3 = st.columns([2, 1.3, 2])
-        with c1: st.markdown(f"<div class='team-box'>🏠 {m['home_team']}</div>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<div class='team-box'>✈️ {m['away_team']}</div>", unsafe_allow_html=True)
+        with c1: st.markdown(f"<div class='team-box'>🏠 {flag(m['home_team'])}{m['home_team']}</div>", unsafe_allow_html=True)
+        with c3: st.markdown(f"<div class='team-box'>✈️ {flag(m['away_team'])}{m['away_team']}</div>", unsafe_allow_html=True)
         if existing:                       # immutable — already predicted
             with c2:
                 jk = " 🃏" if existing.get('use_joker') else ""

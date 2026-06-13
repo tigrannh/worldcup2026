@@ -564,9 +564,11 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
         is_locked = now_utc() >= lock or m.get('status') == 'finished'
         existing = pred_by_match.get(m['id'])
         st.markdown('<div class="glass-card" style="padding:12px; margin-bottom:8px;">', unsafe_allow_html=True)
+        grp_badge = (f"<span style='color:#FFD700; font-weight:900;'>📦 Խումբ {m['group_name']}</span> · "
+                     if m.get('group_name') else "")
         st.markdown(
             f"<div style='text-align:center; color:#00d4ff; font-weight:700; font-size:0.85rem;'>"
-            f"🔒 Վերջնաժամկետ՝ {to_yerevan(lock).strftime('%d.%m  %H:%M')} (Երևան)</div>",
+            f"{grp_badge}🔒 Վերջնաժամկետ՝ {to_yerevan(lock).strftime('%d.%m  %H:%M')} (Երևան)</div>",
             unsafe_allow_html=True)
         c1, c2, c3 = st.columns([2, 1.3, 2])
         with c1: st.markdown(f"<div class='team-box'>{flag(m['home_team'])}{m['home_team']}</div>", unsafe_allow_html=True)
@@ -634,16 +636,13 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
             f"<span style='font-size:1rem; color:#00d4ff;'>({len(smatches)}/{EXPECTED[stage]})</span>{jk_note}",
             unsafe_allow_html=True)
 
-        if stage == 'group':
-            for g in sorted({m['group_name'] for m in smatches if m.get('group_name')}):
-                with st.container(border=True):
-                    st.markdown(f"<div style='font-family:Orbitron; font-weight:900; font-size:1.25rem;"
-                                f" color:#FFD700;'>📦 Խումբ {g}</div>", unsafe_allow_html=True)
-                    for m in [mm for mm in smatches if mm.get('group_name') == g]:
-                        render_card(m)
-        else:
-            for m in smatches:
-                render_card(m)
+        # All stages render as one flat list ordered by deadline (smatches is
+        # already sorted by kickoff_time). For the group stage the group letter
+        # is shown as a badge on each card instead of separate group blocks, so
+        # the soonest-closing game is always nearest the top — no deadline hides
+        # under a "later" group.
+        for m in smatches:
+            render_card(m)
 
         # empty placeholder boxes for games not yet added (all stages, no extra text)
         remaining = EXPECTED[stage] - len(smatches)

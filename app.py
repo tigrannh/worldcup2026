@@ -325,12 +325,22 @@ _nav_labels = {k: lbl for k, lbl in NAV}
 if is_admin:
     _nav_labels["ԱԴՄԻՆ"] = "🛠️ ԱԴՄԻՆ"
 _nav_keys = list(_nav_labels.keys())
+
+# Keep the picker in sync with the current page so sidebar-button navigation is
+# reflected here too. We DON'T pass index= and DON'T compare against page: the
+# selectbox and the sidebar buttons both drive the same `page` state, and an
+# index/compare approach makes the stale widget value hijack button navigation.
+# Seeding the widget's session_state key before it renders is the supported way
+# to set its value; genuine user picks are captured by the on_change callback
+# (callbacks run before the rerun, so `page` is already updated above).
+st.session_state['wc_pagesel'] = page if page in _nav_keys else _nav_keys[0]
+
+def _on_pagesel():
+    st.session_state['page'] = st.session_state['wc_pagesel']
+
 with st.container(key="wc_topnav"):
-    _cur = page if page in _nav_keys else _nav_keys[0]
-    _sel = st.selectbox("📂 Էջ", _nav_keys, index=_nav_keys.index(_cur),
-                        format_func=lambda k: _nav_labels[k], key="wc_pagesel")
-    if _sel != page:
-        st.session_state['page'] = _sel; st.rerun()
+    st.selectbox("📂 Էջ", _nav_keys, format_func=lambda k: _nav_labels[k],
+                 key="wc_pagesel", on_change=_on_pagesel)
 
 
 # ===================  PAGE: RULES  ===========================================

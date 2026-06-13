@@ -172,6 +172,23 @@ st.markdown("""
         h2 { font-size: 1.25rem !important; }
         h3 { font-size: 1.1rem !important; }
     }
+    /* --- lock the sidebar OPEN: remove collapse button + force it visible --- */
+    /* hide every flavour of the collapse / expand control across versions */
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebar"] button[kind="header"],
+    [data-testid="stSidebarHeader"] button {
+        display: none !important;
+    }
+    /* force the sidebar shown even if the browser saved a "collapsed" state */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"][aria-expanded="false"] {
+        transform: none !important;
+        visibility: visible !important;
+        margin-left: 0 !important;
+        min-width: 244px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 

@@ -82,7 +82,7 @@ def flag(name):
     f = FLAGS.get(name, "")
     return f + " " if f else ""
 
-st.set_page_config(page_title="WC2026 Arena | Ameriabank", page_icon="🏆", layout="wide")
+st.set_page_config(page_title="WC2026 Arena | Ameriabank", page_icon="🏆", layout="wide", initial_sidebar_state="expanded")
 
 # --- CINEMATIC + READABLE CSS ------------------------------------------------
 st.markdown("""
@@ -162,6 +162,16 @@ st.markdown("""
     [class*="viewerBadge"] { display: none !important; }
     [data-testid="stAppViewerBadge"] { display: none !important; }
     a[href*="streamlit.io"] { display: none !important; }
+    /* --- responsive: phones only (<=640px). Laptops/desktops unaffected. --- */
+    @media (max-width: 640px) {
+        html, body, [data-testid="stAppViewContainer"] { font-size: 14px !important; }
+        .block-container { padding-left: 0.6rem !important; padding-right: 0.6rem !important; padding-top: 1rem !important; }
+        [data-testid="stSidebar"] { min-width: 78vw !important; width: 78vw !important; }
+        div.stButton > button { font-size: 0.9rem !important; }
+        h1 { font-size: 1.5rem !important; }
+        h2 { font-size: 1.25rem !important; }
+        h3 { font-size: 1.1rem !important; }
+    }
 </style>
 """, unsafe_allow_html=True)
 

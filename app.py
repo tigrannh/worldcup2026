@@ -171,32 +171,27 @@ st.markdown("""
         h2 { font-size: 1.25rem !important; }
         h3 { font-size: 1.1rem !important; }
     }
-    /* --- lock the sidebar OPEN: remove collapse button + force it visible --- */
-    /* hide every flavour of the collapse / expand control across versions */
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"],
-    [data-testid="stSidebar"] button[kind="header"],
-    [data-testid="stSidebarHeader"] button {
-        display: none !important;
-    }
-    /* force the sidebar shown even if the browser saved a "collapsed" state */
-    [data-testid="stSidebar"],
-    [data-testid="stSidebar"][aria-expanded="false"] {
-        transform: none !important;
-        visibility: visible !important;
-        margin-left: 0 !important;
-        min-width: 244px !important;
-    }
-    /* phones: keep the locked sidebar NARROW so the page content stays visible */
-    @media (max-width: 640px) {
+    /* --- DESKTOP only (>=641px): lock sidebar open, remove collapse button --- */
+    @media (min-width: 641px) {
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebar"] button[kind="header"],
+        [data-testid="stSidebarHeader"] button {
+            display: none !important;
+        }
         [data-testid="stSidebar"],
         [data-testid="stSidebar"][aria-expanded="false"] {
-            min-width: 52vw !important;
-            width: 52vw !important;
-            max-width: 52vw !important;
+            transform: none !important;
+            visibility: visible !important;
+            margin-left: 0 !important;
+            min-width: 244px !important;
         }
+        /* the phone page-picker is redundant on desktop -> hide it */
+        .st-key-wc_topnav { display: none !important; }
     }
+    /* on PHONES the sidebar stays collapsible (so the page gets full width);
+       the top page-picker above guarantees navigation either way. */
 </style>
 """, unsafe_allow_html=True)
 
@@ -323,6 +318,19 @@ if st.sidebar.button("🔌 ԵԼՔ", use_container_width=True):
     st.rerun()
 
 page = st.session_state['page']
+
+# --- phone-only top page-picker (hidden on desktop via CSS) ------------------
+# guarantees navigation even when the sidebar is collapsed on a small screen.
+_nav_labels = {k: lbl for k, lbl in NAV}
+if is_admin:
+    _nav_labels["ԱԴՄԻՆ"] = "🛠️ ԱԴՄԻՆ"
+_nav_keys = list(_nav_labels.keys())
+with st.container(key="wc_topnav"):
+    _cur = page if page in _nav_keys else _nav_keys[0]
+    _sel = st.selectbox("📂 Էջ", _nav_keys, index=_nav_keys.index(_cur),
+                        format_func=lambda k: _nav_labels[k], key="wc_pagesel")
+    if _sel != page:
+        st.session_state['page'] = _sel; st.rerun()
 
 
 # ===================  PAGE: RULES  ===========================================

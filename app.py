@@ -166,7 +166,6 @@ st.markdown("""
     @media (max-width: 640px) {
         html, body, [data-testid="stAppViewContainer"] { font-size: 14px !important; }
         .block-container { padding-left: 0.6rem !important; padding-right: 0.6rem !important; padding-top: 1rem !important; }
-        [data-testid="stSidebar"] { min-width: 78vw !important; width: 78vw !important; }
         div.stButton > button { font-size: 0.9rem !important; }
         h1 { font-size: 1.5rem !important; }
         h2 { font-size: 1.25rem !important; }
@@ -188,6 +187,15 @@ st.markdown("""
         visibility: visible !important;
         margin-left: 0 !important;
         min-width: 244px !important;
+    }
+    /* phones: keep the locked sidebar NARROW so the page content stays visible */
+    @media (max-width: 640px) {
+        [data-testid="stSidebar"],
+        [data-testid="stSidebar"][aria-expanded="false"] {
+            min-width: 52vw !important;
+            width: 52vw !important;
+            max-width: 52vw !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)

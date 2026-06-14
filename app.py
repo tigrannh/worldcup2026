@@ -806,9 +806,9 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
 # ===================  PAGE: ADMIN  ===========================================
 elif page == "ԱԴՄԻՆ" and is_admin:
     st.title("⚡ ՀԱՄԱԿԱՐԳԻ ԿԱՌԱՎԱՐՈՒՄ")
-    tab_open, tab_results, tab_fix, tab_official, tab_users = st.tabs(
+    tab_open, tab_results, tab_fix, tab_official, tab_users, tab_stats = st.tabs(
         ["➕ ԲԱՑԵԼ ԽԱՂԵՐ", "📝 ՄՈՒՏՔԱԳՐԵԼ ԱՐԴՅՈՒՆՔ", "✏️ ՈՒՂՂԵԼ",
-         "🏁 ՊԱՇՏՈՆԱԿԱՆ ԱՐԴՅՈՒՆՔ", "👥 ՄԱՍՆԱԿԻՑՆԵՐ"])
+         "🏁 ՊԱՇՏՈՆԱԿԱՆ ԱՐԴՅՈՒՆՔ", "👥 ՄԱՍՆԱԿԻՑՆԵՐ", "📊 ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ"])
 
     # ---- Tab 1: open new matches -------------------------------------------
     with tab_open:
@@ -1067,3 +1067,71 @@ elif page == "ԱԴՄԻՆ" and is_admin:
                 st.markdown("**🚫 Անջատված մասնակիցներ՝**")
                 for u in inactive:
                     st.markdown(f"- {u.get('display_name') or u['username']} ({u['email']})")
+
+    # ---- Tab 6: participation analytics (read-only) ------------------------
+    with tab_stats:
+        st.subheader("📊 Մասնակցության վերլուծություն")
+        st.caption("Ո՞վ է կանխատեսել առաջիկա խաղերը և ո՞վ՝ ոչ։ Միայն ընթերցում է — "
+                   "ոչ մի միավոր/կանխատեսում չի փոխվում։")
+
+        # active participants only (deactivated users can't predict anyway)
+        a_users = supabase.table("users").select(
+            "id, display_name, username, email").eq("is_active", True).execute().data or []
+        total_active = len(a_users)
+        name_of = {u['id']: (u.get('display_name') or u.get('username') or u['email']) for u in a_users}
+        email_of = {u['id']: u['email'] for u in a_users}
+        active_ids = set(name_of.keys())
+
+        all_preds = supabase.table("predictions").select("user_id, match_id").execute().data or []
+
+        # upcoming = open (scheduled) AND not yet locked → still predictable
+        allm = supabase.table("matches").select("*").order("kickoff_time").execute().data or []
+        upcoming = [m for m in allm
+                    if m.get('status') != 'finished' and now_utc() < parse_dt(m['lock_time'])]
+
+        # --- overall picture ---
+        users_with_any = {p['user_id'] for p in all_preds} & active_ids
+        st.markdown(f"**Ակտիվ մասնակից՝** {total_active} &nbsp;|&nbsp; "
+                    f"**Գոնե մեկ կանխատեսում արել է՝** {len(users_with_any)} &nbsp;|&nbsp; "
+                    f"**Բացակա (0 կանխատեսում)՝** {total_active - len(users_with_any)}")
+        st.divider()
+
+        st.markdown(f"### ⏳ Առաջիկա խաղեր ({len(upcoming)})")
+        if not upcoming:
+            st.info("Այս պահին բաց, դեռ չփակված խաղ չկա։")
+        for m in upcoming:
+            predicted_ids = {p['user_id'] for p in all_preds
+                             if p['match_id'] == m['id'] and p['user_id'] in active_ids}
+            missing = [u for u in a_users if u['id'] not in predicted_ids]
+            done = total_active - len(missing)
+            grp = f"📦 {m['group_name']} · " if m.get('group_name') else ""
+            dl = to_yerevan(parse_dt(m['lock_time'])).strftime('%d.%m %H:%M')
+            with st.expander(
+                    f"{flag(m['home_team'])}{m['home_team']} – {m['away_team']}{flag(m['away_team'])}  "
+                    f"·  ✅ {done}/{total_active}  ·  ⏳ {len(missing)} բացակա  "
+                    f"·  {grp}🔒 {dl}"):
+                if not missing:
+                    st.success("🎉 Բոլորը կանխատեսել են այս խաղը։")
+                else:
+                    st.caption("Չեն կանխատեսել (հիշեցնելու համար)՝")
+                    for u in sorted(missing, key=lambda x: name_of[x['id']]):
+                        st.markdown(f"- {name_of[u['id']]} — `{email_of[u['id']]}`")
+                    emails = "; ".join(email_of[u['id']] for u in missing)
+                    st.text_area("✉️ Email-եր (պատճենիր)", emails, height=68, key=f"em_{m['id']}")
+
+        # --- who hasn't predicted ANY upcoming game ---
+        if upcoming:
+            up_ids = {m['id'] for m in upcoming}
+            predicted_any_up = {p['user_id'] for p in all_preds
+                                if p['match_id'] in up_ids and p['user_id'] in active_ids}
+            no_up = [u for u in a_users if u['id'] not in predicted_any_up]
+            st.divider()
+            st.markdown(f"### 🔕 Ոչ մի առաջիկա խաղ չեն կանխատեսել ({len(no_up)})")
+            if not no_up:
+                st.success("🎉 Բոլոր ակտիվ մասնակիցները կանխատեսել են գոնե մեկ առաջիկա խաղ։")
+            else:
+                for u in sorted(no_up, key=lambda x: name_of[x['id']]):
+                    st.markdown(f"- {name_of[u['id']]} — `{email_of[u['id']]}`")
+                st.text_area("✉️ Բոլոր բացակաների email-երը",
+                             "; ".join(email_of[u['id']] for u in no_up),
+                             height=80, key="em_none_up")

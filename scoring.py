@@ -152,8 +152,19 @@ def _table(sb, name):
         return []
 
 
-def recalculate(sb):
-    """Full idempotent recompute. Returns a short summary string."""
+def recalculate(sb, commit=True):
+    """Full idempotent recompute. Returns a short summary string.
+
+    Missing predictions are treated as a 0-0 prediction (the normal "forgot to
+    submit" rule): a user who never predicted a finished game scores as if they
+    had predicted 0-0, and counts as having predicted 0-0 for group tables too.
+    No 0-0 rows are written — it's computed here, so it auto-applies to past and
+    future games and is undone simply by reverting this file. A real prediction,
+    once submitted, always wins over the default and stays immutable.
+
+    commit=False computes everything but writes NOTHING to the DB and returns a
+    dict {user_id: {total, bonus, exact, diff, outcome, wrong}} for previewing.
+    """
     users   = sb.table('users').select('*').execute().data
     matches = sb.table('matches').select('*').execute().data
     preds   = sb.table('predictions').select('*').execute().data
@@ -215,6 +226,23 @@ def recalculate(sb):
 
     pred_by = {(p['user_id'], p['match_id']): p for p in preds}
 
+    # ---- 1b) DEFAULT MISSING PREDICTIONS TO 0-0 -----------------------------
+    # A user who never predicted a finished game is treated as having predicted
+    # 0-0 (the normal "forgot to submit" rule). No row is created — the points
+    # are just counted here, so this applies to past and future games alike and
+    # never blocks a real user from submitting (their row, if any, wins above).
+    for m in finished.values():
+        for u in users:
+            uid = u['id']
+            if (uid, m['id']) in pred_by:
+                continue                               # they really predicted -> already scored
+            cat, bp = categorize(m['stage'], 0, 0, m['home_score'], m['away_score'])
+            pts[uid] += bp
+            if   cat == 'exact':   exact[uid] += 1
+            elif cat == 'diff':    diffc[uid] += 1
+            elif cat == 'outcome': outc[uid]  += 1
+            else:                  wrongc[uid] += 1
+
     # group matches grouped by letter
     groups = defaultdict(list)
     for m in matches:
@@ -228,14 +256,17 @@ def recalculate(sb):
         third_picks = []
 
         for g, gms in groups.items():
-            # A group's bonus (winner/runner-up/qualifiers) is earned ONLY if the
-            # user predicted ALL the group's games — a partial prediction can't
-            # honestly claim the group's final order, so it earns nothing here.
-            ups = [pred_by.get((uid, mm['id'])) for mm in gms]
-            if len(gms) < 6 or any(u is None for u in ups):
+            # The group bonus needs all 6 games OPENED by the admin to build a
+            # full table. Any game the user didn't predict counts as 0-0 (the
+            # same "forgot to submit" rule), so everyone has a complete table.
+            if len(gms) < 6:
                 continue
-            rows = [(mm['home_team'], mm['away_team'], up['pred_home'], up['pred_away'])
-                    for mm, up in zip(gms, ups)]
+            rows = []
+            for mm in gms:
+                up = pred_by.get((uid, mm['id']))
+                ph = up['pred_home'] if up else 0
+                pa = up['pred_away'] if up else 0
+                rows.append((mm['home_team'], mm['away_team'], ph, pa))
             pst = _standings(rows)
 
             off = group_official.get(g)
@@ -269,6 +300,12 @@ def recalculate(sb):
         if same(u.get('champion_pick'), gold):   bonus[u['id']] += MEDAL_GOLD
         if same(u.get('runnerup_pick'), silver): bonus[u['id']] += MEDAL_SILVER
         if same(u.get('bronze_pick'),  bronze):  bonus[u['id']] += MEDAL_BRONZE
+
+    # ---- preview mode: compute only, write NOTHING ---------------------------
+    if not commit:
+        return {u['id']: {'total': pts[u['id']] + bonus[u['id']], 'bonus': bonus[u['id']],
+                          'exact': exact[u['id']], 'diff': diffc[u['id']],
+                          'outcome': outc[u['id']], 'wrong': wrongc[u['id']]} for u in users}
 
     # ---- 4) WRITE BACK -------------------------------------------------------
     for chunk in _chunks(pred_updates):

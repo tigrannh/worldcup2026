@@ -777,6 +777,17 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
     st.markdown("## 🧾 ԻՄ ԿԱՆԽԱՏԵՍՈՒՄՆԵՐԻ ՊԱՏՄՈՒԹՅՈՒՆ")
     rows = supabase.table("predictions").select("*, matches(*)").eq(
         "user_id", user_data['id']).execute().data or []
+    # Finished games the user never predicted are scored as an automatic 0-0
+    # (the "forgot to submit" rule). No row exists in the DB — we just show the
+    # 0-0 here so the user sees it, with the points the engine actually counted.
+    predicted_ids = {r.get('match_id') for r in rows}
+    for m in (supabase.table("matches").select("*").eq("status", "finished").execute().data or []):
+        if m['id'] in predicted_ids or m.get('home_score') is None or m.get('away_score') is None:
+            continue
+        rows.append({'match_id': m['id'], 'pred_home': 0, 'pred_away': 0, 'use_joker': False,
+                     'auto': True, 'matches': m,
+                     'points_earned': scoring.base_points(m['stage'], 0, 0,
+                                                           m['home_score'], m['away_score'])})
     if not rows:
         st.info("Դեռևս կանխատեսումներ չկան։ Երբ մրցաշարը սկսվի՝ քո պատմությունը կհայտնվի այստեղ։")
     else:
@@ -784,6 +795,7 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
         for r in rows:
             m = r['matches'] or {}
             jk = " 🃏" if r.get('use_joker') else ""
+            auto_tag = " <small class='muted'>(ինքնաշխատ 0-0)</small>" if r.get('auto') else ""
             CAT = {'exact': '🎯 Ճիշտ հաշիվ', 'diff': '➕ Գոլային տարբերություն',
                    'outcome': '✅ Ճիշտ ելք', 'wrong': '❌ Սխալ'}
             if m.get('status') == 'finished':
@@ -798,7 +810,7 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
                 real, badge = "—", "<span class='muted'>⏳ սպասում է</span>"
             st.markdown(
                 f"<div class='glass-card' style='display:flex; justify-content:space-between; align-items:center;'>"
-                f"<div><b>{m.get('home_team','?')} {r['pred_home']}:{r['pred_away']}{jk} {m.get('away_team','?')}</b>"
+                f"<div><b>{m.get('home_team','?')} {r['pred_home']}:{r['pred_away']}{jk} {m.get('away_team','?')}</b>{auto_tag}"
                 f"<br><small class='muted'>{STAGES.get(m.get('stage'),'')} · Իրական՝ {real}</small></div>"
                 f"<div style='text-align:right;'>{badge}</div></div>", unsafe_allow_html=True)
 

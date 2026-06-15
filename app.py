@@ -298,7 +298,8 @@ NAV = [("ԿԱՆՈՆՆԵՐ", "📜 ԿԱՆՈՆՆԵՐ"),
        ("ԱՂՅՈՒՍԱԿ", "🏆 ԱՂՅՈՒՍԱԿ"),
        ("ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ", "🎯 ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ"),
        ("ՄԵԴԱԼՆԵՐ", "🥇 ՄԵԴԱԼՆԵՐ"),
-       ("ԱՐԴՅՈՒՆՔՆԵՐ", "📊 ԻՄ ԱՐԴՅՈՒՆՔՆԵՐԸ")]
+       ("ԱՐԴՅՈՒՆՔՆԵՐ", "📊 ԻՄ ԱՐԴՅՈՒՆՔՆԵՐԸ"),
+       ("ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ", "📈 ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ")]
 for key, label in NAV:
     if st.sidebar.button(label, use_container_width=True,
                          type="primary" if st.session_state['page'] == key else "secondary"):
@@ -824,6 +825,206 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
                 f"<div><b>{m.get('home_team','?')} {r['pred_home']}:{r['pred_away']}{jk} {m.get('away_team','?')}</b>{auto_tag}"
                 f"<br><small class='muted'>{STAGES.get(m.get('stage'),'')} · Իրական՝ {real}</small></div>"
                 f"<div style='text-align:right;'>{badge}</div></div>", unsafe_allow_html=True)
+
+
+# ===================  PAGE: ANALYTICS / WIN PROBABILITY  =====================
+elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
+    import random as _random
+    import math as _math
+    from collections import Counter as _Counter
+    N_RUNS = 2000
+
+    st.title("📈 ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ")
+    st.caption(f"Հաղթելու հավանականությունը՝ {N_RUNS:,}+ սիմուլյացիայի հիման վրա, "
+               f"ըստ ձեր կանխատեսման ոճի։ Թարմացվում է ինքնաշխատ՝ ամեն նոր արդյունքից հետո։")
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _win_probabilities(version, n_runs=N_RUNS):
+        users = supabase.table("users").select(
+            "id, username, display_name, total_points, champion_pick, runnerup_pick, bronze_pick"
+        ).eq("is_active", True).execute().data or []
+        if len(users) < 2:
+            return None, None
+        matches = supabase.table("matches").select("*").execute().data or []
+        preds = supabase.table("predictions").select(
+            "user_id, match_id, pred_home, pred_away, use_joker").execute().data or []
+        try:
+            tr = supabase.table("tournament_result").select("*").execute().data or []
+        except Exception:
+            tr = []
+        medals_done = bool(tr and (tr[0].get('gold') or tr[0].get('silver') or tr[0].get('bronze')))
+
+        pred_by = {(p['user_id'], p['match_id']): p for p in preds}
+        finished_ids = {m['id'] for m in matches
+                        if m['status'] == 'finished' and m['home_score'] is not None}
+        remaining = [m for m in matches if m['id'] not in finished_ids]
+
+        # result model calibrated to the real finished games so far
+        fin = [(m['home_score'], m['away_score']) for m in matches if m['id'] in finished_ids]
+        if fin:
+            lamH = max(0.2, sum(h for h, _ in fin) / len(fin))
+            lamA = max(0.2, sum(a for _, a in fin) / len(fin))
+        else:
+            lamH, lamA = 1.45, 1.15
+
+        # scoreline distributions used to PROJECT a user's future picks (their own
+        # style, smoothed toward the whole pool when they have few predictions)
+        pool_lines = [(p['pred_home'], p['pred_away']) for p in preds]
+        user_lines = {}
+        for p in preds:
+            user_lines.setdefault(p['user_id'], []).append((p['pred_home'], p['pred_away']))
+
+        uids = [u['id'] for u in users]
+        now_pts = {u['id']: (u.get('total_points') or 0) for u in users}
+        nm = {u['id']: (u.get('display_name') or u.get('username') or u['id']) for u in users}
+
+        # a locked game can no longer be predicted -> missing = 0-0 (the real rule);
+        # a still-open game -> we project a likely pick from the user's style.
+        locked_ids = set()
+        for m in remaining:
+            try:
+                lk = parse_dt(m['lock_time'])
+            except Exception:
+                lk = None
+            if m.get('status') == 'finished' or (lk and now_utc() >= lk):
+                locked_ids.add(m['id'])
+
+        rng = _random.Random(20260615)   # fixed seed -> numbers are stable across reruns
+
+        def poisson(lam):
+            L = _math.exp(-lam); k = 0; pr = 1.0
+            while True:
+                k += 1; pr *= rng.random()
+                if pr <= L:
+                    return k - 1
+
+        def proj_pick(uid):
+            lines = user_lines.get(uid)
+            if lines and rng.random() < len(lines) / (len(lines) + 5):
+                return rng.choice(lines)          # their own style
+            if pool_lines:
+                return rng.choice(pool_lines)     # fall back to the room's style
+            return (rng.randint(0, 3), rng.randint(0, 3))
+
+        teams = COUNTRIES
+        win = {u: 0 for u in uids}
+        top3 = {u: 0 for u in uids}
+        totals = {u: [] for u in uids}
+
+        for _ in range(n_runs):
+            score = dict(now_pts)
+            for m in remaining:                    # remaining match points
+                rh, ra = poisson(lamH), poisson(lamA)
+                stage = m['stage']
+                for uid in uids:
+                    p = pred_by.get((uid, m['id']))
+                    if p:
+                        ph, pa, jk = p['pred_home'], p['pred_away'], p.get('use_joker')
+                    elif m['id'] in locked_ids:
+                        ph, pa, jk = 0, 0, False
+                    else:
+                        ph, pa = proj_pick(uid); jk = False
+                    _, bp = scoring.categorize(stage, ph, pa, rh, ra)
+                    score[uid] += bp * (2 if jk else 1)
+            if not medals_done and len(teams) >= 3:   # medals (still up for grabs)
+                g, s, b = rng.sample(teams, 3)
+                for u in users:
+                    uid = u['id']
+                    if u.get('champion_pick') == g: score[uid] += scoring.MEDAL_GOLD
+                    if u.get('runnerup_pick') == s: score[uid] += scoring.MEDAL_SILVER
+                    if u.get('bronze_pick') == b:   score[uid] += scoring.MEDAL_BRONZE
+            ranked = sorted(uids, key=lambda u: score[u], reverse=True)
+            win[ranked[0]] += 1
+            for u in ranked[:3]:
+                top3[u] += 1
+            for u in uids:
+                totals[u].append(score[u])
+
+        rows = []
+        for u in users:
+            uid = u['id']; ts = sorted(totals[uid]); n = len(ts)
+            rows.append({'name': nm[uid], 'now': now_pts[uid],
+                         'win': 100.0 * win[uid] / n_runs, 'top3': 100.0 * top3[uid] / n_runs,
+                         'proj': ts[n // 2], 'lo': ts[int(0.05 * n)], 'hi': ts[min(n - 1, int(0.95 * n))]})
+        df = pd.DataFrame(rows).sort_values(['win', 'proj'], ascending=False).reset_index(drop=True)
+
+        pat = {}
+        for u in users:
+            uid = u['id']; lines = user_lines.get(uid, [])
+            if lines:
+                n = len(lines)
+                sig = _Counter(lines).most_common(1)[0][0]
+                pat[uid] = {'name': nm[uid], 'n': n,
+                            'avg': sum(h + a for h, a in lines) / n,
+                            'draw': 100.0 * sum(1 for h, a in lines if h == a) / n,
+                            'fav': 100.0 * sum(1 for h, a in lines if h > a) / n,
+                            'sig': f"{sig[0]}-{sig[1]}"}
+            else:
+                pat[uid] = {'name': nm[uid], 'n': 0, 'avg': 0, 'draw': 0, 'fav': 0, 'sig': '—'}
+        return df, pat
+
+    _av = supabase.table("users").select("total_points").eq("is_active", True).execute().data or []
+    _pc = supabase.table("predictions").select("id").execute().data or []
+    version = f"{sum((u.get('total_points') or 0) for u in _av)}-{len(_pc)}"
+
+    with st.spinner("Հաշվարկվում է հաղթելու հավանականությունը..."):
+        df, pat = _win_probabilities(version)
+
+    if df is None or df.empty:
+        st.info("Դեռ բավարար տվյալներ չկան սիմուլյացիայի համար։")
+    else:
+        st.markdown("### 🎲 ՀԱՂԹԵԼՈՒ ՀԱՎԱՆԱԿԱՆՈՒԹՅՈՒՆ")
+        st.caption("Ընթացիկ տեղը կարող է խաբուսիկ լինի. դեռ շատ միավորներ խաղում են (մեդալներ, "
+                   "առաջիկա խաղեր)։ 🚀 = ցածր տեղ, բայց հաղթելու լուրջ շանս։")
+        maxwin = max(df['win'].max(), 1e-9)
+        topnow = max(df['now'].max(), 1)
+        for i, r in df.iterrows():
+            rank = i + 1
+            w = r['win']
+            barw = max(2, int(100 * w / maxwin))
+            col = ("#00ff88" if rank == 1 else "#00d4ff" if rank <= 3
+                   else "#FFD700" if w >= 5 else "#9aa")
+            spark = " 🚀" if (rank > 3 and r['now'] < 0.7 * topnow and w >= 5) else ""
+            st.markdown(
+                f"<div class='glass-card' style='padding:10px 14px; margin-bottom:8px;'>"
+                f"<div style='display:flex; justify-content:space-between; align-items:center;'>"
+                f"<span style='font-weight:900; color:#fff; font-size:1.05rem;'>{rank}. {r['name'].upper()}{spark}</span>"
+                f"<span style='font-family:Orbitron; color:{col}; font-weight:900; font-size:1.15rem;'>{w:.1f}%</span></div>"
+                f"<div style='background:rgba(255,255,255,0.07); border-radius:6px; height:11px; margin:7px 0;'>"
+                f"<div style='width:{barw}%; height:11px; border-radius:6px; "
+                f"background:linear-gradient(90deg,#00d4ff,{col});'></div></div>"
+                f"<small class='muted'>Հիմա՝ {int(r['now'])}մ · 🥉 Եռյակում՝ {r['top3']:.0f}% · "
+                f"🔮 Կանխատեսվող՝ {int(r['proj'])}մ ({int(r['lo'])}–{int(r['hi'])})</small></div>",
+                unsafe_allow_html=True)
+
+        st.divider()
+        st.markdown("### 🧬 ԿԱՆԽԱՏԵՍՄԱՆ ՈՃԵՐ")
+        me = pat.get(user_data['id'])
+        if me and me['n']:
+            st.caption(f"Քո ստորագրությունը՝ հիմնված {me['n']} կանխատեսման վրա "
+                       f"(ճշտվում է՝ որքան շատ կանխատեսես)։")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("🎯 Միջ. գոլ/խաղ", f"{me['avg']:.1f}")
+            c2.metric("🤝 Ոչ-ոքի", f"{me['draw']:.0f}%")
+            c3.metric("🏠 Ֆավորիտ", f"{me['fav']:.0f}%")
+            c4.metric("✍️ Ստորագրություն", me['sig'])
+        else:
+            st.info("Դեռ չունես կանխատեսումներ՝ ոճդ ցույց տալու համար։")
+
+        st.markdown("#### Բոլորի ոճերը")
+        pdf = pd.DataFrame([pat[u] for u in pat])
+        pdf = pdf[pdf['n'] > 0].sort_values('n', ascending=False)
+        if not pdf.empty:
+            pdf = pdf[['name', 'n', 'avg', 'draw', 'fav', 'sig']].copy()
+            pdf['avg'] = pdf['avg'].round(1)
+            pdf['draw'] = pdf['draw'].round(0).astype(int).astype(str) + '%'
+            pdf['fav'] = pdf['fav'].round(0).astype(int).astype(str) + '%'
+            pdf.columns = ["Մասնակից", "Կանխ.", "Միջ. գոլ", "🤝 Ոչ-ոքի", "🏠 Ֆավորիտ", "✍️ Ստորագր."]
+            st.dataframe(pdf, use_container_width=True, hide_index=True,
+                         height=min(600, 60 + 35 * len(pdf)))
+
+        st.caption("ℹ️ Մոդելը՝ թիմերը հավասար ուժի, արդյունքները՝ ըստ իրական խաղերի միջինի, "
+                   "մեդալները՝ պատահական։ Խմբային/որակավորման ապագա բոնուսները դեռ ներառված չեն։")
 
 
 # ===================  PAGE: ADMIN  ===========================================

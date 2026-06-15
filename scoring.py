@@ -179,9 +179,17 @@ def recalculate(sb, commit=True):
                 if m['status'] == 'finished'
                 and m['home_score'] is not None and m['away_score'] is not None}
 
-    # remember current ranks (same order as the leaderboard) for ↑/↓ arrows
-    by_pts = sorted(users, key=lambda u: ((u.get('total_points') or 0),
-                                          (u.get('exact_scores_count') or 0)), reverse=True)
+    # remember current ranks (same tie-break as the leaderboard) for ↑/↓ arrows:
+    # points -> exact -> goal-diff -> outcome -> earliest first prediction -> username.
+    first_pred = {}
+    for p in preds:
+        uid, ts = p['user_id'], (p.get('created_at') or '')
+        if uid not in first_pred or ts < first_pred[uid]:
+            first_pred[uid] = ts
+    by_pts = sorted(users, key=lambda u: (
+        -(u.get('total_points') or 0), -(u.get('exact_scores_count') or 0),
+        -(u.get('diff_count') or 0), -(u.get('outcome_count') or 0),
+        first_pred.get(u['id'], '9999'), (u.get('username') or '')))
     prev_rank = {u['id']: i + 1 for i, u in enumerate(by_pts)}
 
     pts    = {u['id']: 0 for u in users}   # match points

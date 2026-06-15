@@ -436,10 +436,9 @@ if page == "ԿԱՆՈՆՆԵՐ":
 elif page == "ԱՂՅՈՒՍԱԿ":
     st.title("🏆 ԱՐԵՆԱՅԻ ԱՂՅՈՒՍԱԿ")
     res = supabase.table("users").select(
-        "username, display_name, total_points, bonus_points, exact_scores_count, "
+        "id, username, display_name, total_points, bonus_points, exact_scores_count, "
         "diff_count, outcome_count, wrong_count, previous_rank"
-    ).eq("is_active", True).order("total_points", desc=True).order(
-        "exact_scores_count", desc=True).execute()
+    ).eq("is_active", True).execute()
     df = pd.DataFrame(res.data)
     for c in ['exact_scores_count', 'diff_count', 'outcome_count', 'wrong_count',
               'total_points', 'bonus_points']:
@@ -447,8 +446,20 @@ elif page == "ԱՂՅՈՒՍԱԿ":
             df[c] = 0
         df[c] = df[c].fillna(0).astype(int)
     df['name'] = df.apply(lambda r: (r.get('display_name') or r.get('username') or ""), axis=1)
-    # the SQL already sorted by points (then exact count) -> position IS the rank,
-    # which is correct even if two people share the same display name
+    # Tie-break for equal points: more exact scores (🎯) -> more goal-difference
+    # hits (➕) -> more correct outcomes (✅) -> whoever submitted their FIRST
+    # prediction earliest (accounts were bulk-seeded, so creation order is random;
+    # first prediction is the meaningful "who got there first"). Deterministic.
+    if not df.empty:
+        first_pred = {}
+        for p in (supabase.table("predictions").select("user_id, created_at").execute().data or []):
+            uid, ts = p['user_id'], (p.get('created_at') or '')
+            if uid not in first_pred or ts < first_pred[uid]:
+                first_pred[uid] = ts
+        df['_first'] = df['id'].map(lambda x: first_pred.get(x, '9999'))
+        df = df.sort_values(
+            by=['total_points', 'exact_scores_count', 'diff_count', 'outcome_count', '_first', 'username'],
+            ascending=[False, False, False, False, True, True])
     df = df.reset_index(drop=True)
     df['rank'] = df.index + 1
     total = len(df)

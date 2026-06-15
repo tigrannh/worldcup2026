@@ -1127,13 +1127,13 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
         st.markdown("### 🧬 ԿԱՆԽԱՏԵՍՄԱՆ ՈՃԵՐ")
         me = pat.get(user_data['id'])
         if me and me['n']:
-            st.caption(f"Քո ստորագրությունը՝ հիմնված {me['n']} կանխատեսման վրա "
+            st.caption(f"Քո ոճը՝ հիմնված {me['n']} կանխատեսման վրա "
                        f"(ճշտվում է՝ որքան շատ կանխատեսես)։")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("🎯 Միջ. գոլ/խաղ", f"{me['avg']:.1f}")
             c2.metric("🤝 Ոչ-ոքի", f"{me['draw']:.0f}%")
             c3.metric("🏠 Ֆավորիտ", f"{me['fav']:.0f}%")
-            c4.metric("✍️ Ստորագրություն", me['sig'])
+            c4.metric("✍️ Սիրած հաշիվ", me['sig'])
         else:
             st.info("Դեռ չունես կանխատեսումներ՝ ոճդ ցույց տալու համար։")
 
@@ -1145,13 +1145,13 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
             pdf['avg'] = pdf['avg'].round(1)
             pdf['draw'] = pdf['draw'].round(0).astype(int).astype(str) + '%'
             pdf['fav'] = pdf['fav'].round(0).astype(int).astype(str) + '%'
-            pdf.columns = ["Մասնակից", "Կանխ.", "Միջ. գոլ", "🤝 Ոչ-ոքի", "🏠 Ֆավորիտ", "✍️ Ստորագր."]
+            pdf.columns = ["Մասնակից", "Կանխ.", "Միջ. գոլ", "🤝 Ոչ-ոքի", "🏠 Ֆավորիտ", "✍️ Սիրած հաշիվ"]
             st.dataframe(pdf, use_container_width=True, hide_index=True,
                          height=min(600, 60 + 35 * len(pdf)))
 
         # ---------- predictor tribes: who plays alike ----------
         st.divider()
-        st.markdown("### 🧩 ԿԱՆԽԱՏԵՍՈՂ ՑԵՂԵՐ")
+        st.markdown("### 🧩 ԿԱՆԽԱՏԵՍՈՂ ԿԼԱՆՆԵՐ")
         st.caption("Ովքե՞ր են կանխատեսում նմանատիպ ձևով։ Կապը չափվում է ընդհանուր խաղերի վրա "
                    "նույն հաշիվ/տարբերություն/ելք դնելու չափով։ 🐺 Միայնակ գայլերը ոչ մեկին նման չեն։")
 
@@ -1210,7 +1210,7 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
             st.success(f"🤝 Քո ամենանման «երկվորյակը»՝ **{T['nm'][my_twin[0]]}** "
                        f"({my_twin[1] * 100:.0f}% նմանություն)")
         if not T['tribes'] and not T['lone']:
-            st.info("Դեռ բավարար ընդհանուր կանխատեսումներ չկան ցեղեր կազմելու համար։")
+            st.info("Դեռ բավարար ընդհանուր կանխատեսումներ չկան կլաններ կազմելու համար։")
         else:
             PAL = ["#00d4ff", "#ff6b6b", "#FFD700", "#00ff88", "#c77dff", "#ff9f43", "#1dd1a1"]
             if T['tribes']:
@@ -1223,7 +1223,7 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
                 for ti, tr in enumerate(T['tribes']):
                     c = PAL[ti % len(PAL)]
                     for u in tr: tcol[u] = c
-                    dot.append(f'subgraph cluster_{ti} {{ label="Ցեղ {ti+1} · {len(tr)} հոգի"; '
+                    dot.append(f'subgraph cluster_{ti} {{ label="Կլան {ti+1} · {len(tr)} հոգի"; '
                                f'fontcolor="{c}"; color="{c}"; style="rounded"; penwidth=2;')
                     for u in tr:
                         dot.append(f'{nid[u]} [label="{T["nm"][u]}", color="{c}"];')
@@ -1242,13 +1242,13 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
                     members = " · ".join(T['nm'][u] for u in tr)
                     st.markdown(
                         f"<div class='glass-card' style='border-left:4px solid {c}; padding:8px 12px;'>"
-                        f"<b style='color:{c};'>Ցեղ {ti+1} · {len(tr)} հոգի</b> "
+                        f"<b style='color:{c};'>Կլան {ti+1} · {len(tr)} հոգի</b> "
                         f"<small class='muted'>(միջ. {avg:.1f} գոլ/խաղ · {drw:.0f}% ոչ-ոքի)</small><br>"
                         f"<span style='color:#eee;'>{members}</span></div>", unsafe_allow_html=True)
 
             if T['lone']:
                 st.markdown("#### 🐺 Միայնակ գայլեր")
-                st.caption("Ոչ մի ցեղի նման չեն — ոճը յուրահատուկ է (փակագծում՝ ամենամոտ զույգը)։")
+                st.caption("Ոչ մի կլանի նման չեն — ոճը յուրահատուկ է (փակագծում՝ ամենամոտ զույգը)։")
                 lines = []
                 for u in sorted(T['lone'], key=lambda x: T['nm'][x]):
                     tw = T['twin'].get(u)

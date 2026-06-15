@@ -906,7 +906,27 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
                 return rng.choice(pool_lines)     # fall back to the room's style
             return (rng.randint(0, 3), rng.randint(0, 3))
 
-        teams = COUNTRIES
+        # Medals are drawn from the teams people actually rated (weighted by how
+        # many picked them) — a realistic "the champion is a contender" proxy,
+        # far better than a 1-in-48 uniform draw where Haiti = Spain.
+        champ_c = _Counter(u.get('champion_pick') for u in users if u.get('champion_pick'))
+        run_c   = _Counter(u.get('runnerup_pick') for u in users if u.get('runnerup_pick'))
+        brz_c   = _Counter(u.get('bronze_pick') for u in users if u.get('bronze_pick'))
+        contenders = list((champ_c + run_c + brz_c).keys())
+        cweights = [(champ_c + run_c + brz_c)[t] for t in contenders]
+
+        def draw_medals():
+            if len(contenders) >= 3:
+                pool = list(zip(contenders, cweights)); out = []
+                for _ in range(3):
+                    tot = sum(w for _, w in pool); r = rng.random() * tot; acc = 0
+                    for j, (it, w) in enumerate(pool):
+                        acc += w
+                        if r <= acc:
+                            out.append(it); pool.pop(j); break
+                return out
+            return rng.sample(COUNTRIES, 3) if len(COUNTRIES) >= 3 else [None, None, None]
+
         win = {u: 0 for u in uids}
         top3 = {u: 0 for u in uids}
         totals = {u: [] for u in uids}
@@ -926,8 +946,8 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
                         ph, pa = proj_pick(uid); jk = False
                     _, bp = scoring.categorize(stage, ph, pa, rh, ra)
                     score[uid] += bp * (2 if jk else 1)
-            if not medals_done and len(teams) >= 3:   # medals (still up for grabs)
-                g, s, b = rng.sample(teams, 3)
+            if not medals_done:                        # medals (still up for grabs)
+                g, s, b = draw_medals()
                 for u in users:
                     uid = u['id']
                     if u.get('champion_pick') == g: score[uid] += scoring.MEDAL_GOLD

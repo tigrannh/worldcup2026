@@ -1149,6 +1149,113 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
             st.dataframe(pdf, use_container_width=True, hide_index=True,
                          height=min(600, 60 + 35 * len(pdf)))
 
+        # ---------- predictor tribes: who plays alike ----------
+        st.divider()
+        st.markdown("### 🧩 ԿԱՆԽԱՏԵՍՈՂ ՑԵՂԵՐ")
+        st.caption("Ովքե՞ր են կանխատեսում նմանատիպ ձևով։ Կապը չափվում է ընդհանուր խաղերի վրա "
+                   "նույն հաշիվ/տարբերություն/ելք դնելու չափով։ 🐺 Միայնակ գայլերը ոչ մեկին նման չեն։")
+
+        @st.cache_data(ttl=900, show_spinner=False)
+        def _tribes(version, k=2, floor=0.60, min_common=5):
+            us = supabase.table("users").select(
+                "id, display_name, username").eq("is_active", True).execute().data or []
+            pr = supabase.table("predictions").select(
+                "user_id, match_id, pred_home, pred_away").execute().data or []
+            nmm = {u['id']: (u.get('display_name') or u.get('username') or u['id']) for u in us}
+            byu = {}
+            for p in pr:
+                byu.setdefault(p['user_id'], {})[p['match_id']] = (p['pred_home'], p['pred_away'])
+            ids = [u['id'] for u in us if byu.get(u['id'])]
+
+            def tier(a, b):
+                (ah, aa), (bh, ba) = a, b
+                if ah == bh and aa == ba: return 1.0
+                if (ah - aa) == (bh - ba): return 0.6
+                if ((ah > aa) - (ah < aa)) == ((bh > ba) - (bh < ba)): return 0.3
+                return 0.0
+
+            sims = {}
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    u, v = ids[i], ids[j]
+                    common = set(byu[u]) & set(byu[v])
+                    if len(common) >= min_common:
+                        sims[(u, v)] = sum(tier(byu[u][m], byu[v][m]) for m in common) / len(common)
+
+            def sv(u, v): return sims.get((min(u, v), max(u, v)))
+            edges = set(); twin = {}
+            for u in ids:
+                nbrs = sorted((v for v in ids if v != u and sv(u, v) is not None),
+                              key=lambda v: sv(u, v), reverse=True)
+                if nbrs:
+                    twin[u] = (nbrs[0], sv(u, nbrs[0]))
+                for v in nbrs[:k]:
+                    if sv(u, v) >= floor:
+                        edges.add((min(u, v), max(u, v)))
+            par = {u: u for u in ids}
+            def find(x):
+                while par[x] != x: par[x] = par[par[x]]; x = par[x]
+                return x
+            for (u, v) in edges: par[find(u)] = find(v)
+            comp = {}
+            for u in ids: comp.setdefault(find(u), []).append(u)
+            tribes = sorted((c for c in comp.values() if len(c) > 1), key=len, reverse=True)
+            lone = [c[0] for c in comp.values() if len(c) == 1]
+            return {'tribes': tribes, 'lone': lone, 'edges': list(edges), 'twin': twin,
+                    'nm': nmm, 'sims': {f"{a}|{b}": s for (a, b), s in sims.items()}}
+
+        T = _tribes(version)
+        my_twin = T['twin'].get(user_data['id'])
+        if my_twin:
+            st.success(f"🤝 Քո ամենանման «երկվորյակը»՝ **{T['nm'][my_twin[0]]}** "
+                       f"({my_twin[1] * 100:.0f}% նմանություն)")
+        if not T['tribes'] and not T['lone']:
+            st.info("Դեռ բավարար ընդհանուր կանխատեսումներ չկան ցեղեր կազմելու համար։")
+        else:
+            PAL = ["#00d4ff", "#ff6b6b", "#FFD700", "#00ff88", "#c77dff", "#ff9f43", "#1dd1a1"]
+            if T['tribes']:
+                nid = {u: f"n{i}" for i, u in enumerate(x for tr in T['tribes'] for x in tr)}
+                tcol = {}
+                dot = ['graph G { bgcolor="transparent"; rankdir=LR; pad=0.3;',
+                       'node [shape=ellipse,style="filled",fillcolor="#10151f",'
+                       'fontname="Arial",fontsize=11,fontcolor="#ffffff",penwidth=2];',
+                       'edge [color="#9aa6b2"];']
+                for ti, tr in enumerate(T['tribes']):
+                    c = PAL[ti % len(PAL)]
+                    for u in tr: tcol[u] = c
+                    dot.append(f'subgraph cluster_{ti} {{ label="Ցեղ {ti+1} · {len(tr)} հոգի"; '
+                               f'fontcolor="{c}"; color="{c}"; style="rounded"; penwidth=2;')
+                    for u in tr:
+                        dot.append(f'{nid[u]} [label="{T["nm"][u]}", color="{c}"];')
+                    for (a, b) in T['edges']:
+                        if a in tr and b in tr:
+                            s = T['sims'].get(f"{min(a,b)}|{max(a,b)}", 0.6)
+                            dot.append(f'{nid[a]} -- {nid[b]} [penwidth={1 + s * 2:.1f}];')
+                    dot.append('}')
+                dot.append('}')
+                st.graphviz_chart("\n".join(dot), use_container_width=True)
+
+                for ti, tr in enumerate(T['tribes']):
+                    c = PAL[ti % len(PAL)]
+                    avg = sum(pat[u]['avg'] for u in tr if u in pat) / len(tr)
+                    drw = sum(pat[u]['draw'] for u in tr if u in pat) / len(tr)
+                    members = " · ".join(T['nm'][u] for u in tr)
+                    st.markdown(
+                        f"<div class='glass-card' style='border-left:4px solid {c}; padding:8px 12px;'>"
+                        f"<b style='color:{c};'>Ցեղ {ti+1} · {len(tr)} հոգի</b> "
+                        f"<small class='muted'>(միջ. {avg:.1f} գոլ/խաղ · {drw:.0f}% ոչ-ոքի)</small><br>"
+                        f"<span style='color:#eee;'>{members}</span></div>", unsafe_allow_html=True)
+
+            if T['lone']:
+                st.markdown("#### 🐺 Միայնակ գայլեր")
+                st.caption("Ոչ մի ցեղի նման չեն — ոճը յուրահատուկ է (փակագծում՝ ամենամոտ զույգը)։")
+                lines = []
+                for u in sorted(T['lone'], key=lambda x: T['nm'][x]):
+                    tw = T['twin'].get(u)
+                    extra = f" — ամենամոտ՝ {T['nm'][tw[0]]} ({tw[1]*100:.0f}%)" if tw else ""
+                    lines.append(f"- 🐺 **{T['nm'][u]}**{extra}")
+                st.markdown("\n".join(lines))
+
         st.caption("ℹ️ Սիմուլյացիան ներառում է ԲՈԼՈՐ մնացած խաղերը՝ խմբային փուլ (72 խաղ) + "
                    "խմբային ու որակավորման բոնուսներ + բոլոր փլեյ-օֆ փուլերը (աճող միավորներ՝ "
                    "մինչև եզրափակիչ 36) + մեդալներ։ Թիմերը՝ հավասար ուժի, արդյունքները՝ ըստ իրական "

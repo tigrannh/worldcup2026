@@ -832,7 +832,7 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
     import random as _random
     import math as _math
     from collections import Counter as _Counter
-    N_RUNS = 2000
+    N_RUNS = 1200
 
     st.title("📈 ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ")
     st.caption(f"Հաղթելու հավանականությունը՝ {N_RUNS:,}+ սիմուլյացիայի հիման վրա, "
@@ -857,39 +857,72 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
         pred_by = {(p['user_id'], p['match_id']): p for p in preds}
         finished_ids = {m['id'] for m in matches
                         if m['status'] == 'finished' and m['home_score'] is not None}
-        remaining = [m for m in matches if m['id'] not in finished_ids]
 
-        # result model calibrated to the real finished games so far
+        # bonuses the admin already entered are in the baseline points -> don't re-sim
+        try:
+            group_official = {r['group_name'] for r in
+                              (supabase.table("group_official").select("group_name").execute().data or [])}
+        except Exception:
+            group_official = set()
+        try:
+            official_quals = {r['team_name'] for r in
+                              (supabase.table("qualifiers").select("team_name").execute().data or [])}
+        except Exception:
+            official_quals = set()
+
+        # goal models: home/away calibrated to real games; neutral for knockouts
         fin = [(m['home_score'], m['away_score']) for m in matches if m['id'] in finished_ids]
         if fin:
             lamH = max(0.2, sum(h for h, _ in fin) / len(fin))
             lamA = max(0.2, sum(a for _, a in fin) / len(fin))
         else:
-            lamH, lamA = 1.45, 1.15
+            lamH, lamA = 1.4, 1.1
+        lamN = (lamH + lamA) / 2.0
 
-        # scoreline distributions used to PROJECT a user's future picks (their own
+        # scoreline distributions used to PROJECT a user's unmade picks (their own
         # style, smoothed toward the whole pool when they have few predictions)
         pool_lines = [(p['pred_home'], p['pred_away']) for p in preds]
         user_lines = {}
         for p in preds:
             user_lines.setdefault(p['user_id'], []).append((p['pred_home'], p['pred_away']))
-
         uids = [u['id'] for u in users]
         now_pts = {u['id']: (u.get('total_points') or 0) for u in users}
         nm = {u['id']: (u.get('display_name') or u.get('username') or u['id']) for u in users}
 
-        # a locked game can no longer be predicted -> missing = 0-0 (the real rule);
-        # a still-open game -> we project a likely pick from the user's style.
-        locked_ids = set()
-        for m in remaining:
+        # full 2026 draw (mirrors seed_groups.py) -> structure for ALL 72 group games
+        GROUPS = {
+            "A": ["Մեքսիկա", "Հարավային Աֆրիկա", "Հարավային Կորեա", "Չեխիա"],
+            "B": ["Կանադա", "Բոսնիա և Հերցեգովինա", "Կատար", "Շվեյցարիա"],
+            "C": ["Բրազիլիա", "Մարոկկո", "Հաիթի", "Շոտլանդիա"],
+            "D": ["ԱՄՆ", "Պարագվայ", "Ավստրալիա", "Թուրքիա"],
+            "E": ["Գերմանիա", "Կյուրասաո", "Կոտ դ’Իվուար", "Էկվադոր"],
+            "F": ["Նիդեռլանդներ", "Ճապոնիա", "Շվեդիա", "Թունիս"],
+            "G": ["Բելգիա", "Եգիպտոս", "Իրան", "Նոր Զելանդիա"],
+            "H": ["Իսպանիա", "Կաբո Վերդե", "Սաուդյան Արաբիա", "Ուրուգվայ"],
+            "I": ["Ֆրանսիա", "Սենեգալ", "Իրաք", "Նորվեգիա"],
+            "J": ["Արգենտինա", "Ալժիր", "Ավստրիա", "Հորդանան"],
+            "K": ["Պորտուգալիա", "Կոնգո ԴՀ", "Ուզբեկստան", "Կոլումբիա"],
+            "L": ["Անգլիա", "Խորվաթիա", "Գանա", "Պանամա"],
+        }
+        PAIRS = [(0, 1), (2, 3), (0, 2), (1, 3), (0, 3), (1, 2)]
+        KO_STAGES = [('r32', 16), ('r16', 8), ('qf', 4), ('sf', 2), ('third', 1), ('final', 1)]
+
+        real_group = {}
+        for m in matches:
+            if m['stage'] == 'group' and m.get('group_name'):
+                real_group[(m['group_name'], frozenset((m['home_team'], m['away_team'])))] = m
+        # a locked game can no longer be predicted -> missing = 0-0 (the real rule)
+        locked_real = set()
+        for m in matches:
             try:
                 lk = parse_dt(m['lock_time'])
             except Exception:
                 lk = None
-            if m.get('status') == 'finished' or (lk and now_utc() >= lk):
-                locked_ids.add(m['id'])
+            if m['status'] != 'finished' and lk and now_utc() >= lk:
+                locked_real.add(m['id'])
+        real_ko = _Counter(m['stage'] for m in matches if m['stage'] in dict(KO_STAGES))
 
-        rng = _random.Random(20260615)   # fixed seed -> numbers are stable across reruns
+        rng = _random.Random(20260615)   # fixed seed -> numbers stable across reruns
 
         def poisson(lam):
             L = _math.exp(-lam); k = 0; pr = 1.0
@@ -906,53 +939,126 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
                 return rng.choice(pool_lines)     # fall back to the room's style
             return (rng.randint(0, 3), rng.randint(0, 3))
 
-        # Medals are drawn from the teams people actually rated (weighted by how
-        # many picked them) — a realistic "the champion is a contender" proxy,
-        # far better than a 1-in-48 uniform draw where Haiti = Spain.
-        champ_c = _Counter(u.get('champion_pick') for u in users if u.get('champion_pick'))
-        run_c   = _Counter(u.get('runnerup_pick') for u in users if u.get('runnerup_pick'))
-        brz_c   = _Counter(u.get('bronze_pick') for u in users if u.get('bronze_pick'))
-        contenders = list((champ_c + run_c + brz_c).keys())
-        cweights = [(champ_c + run_c + brz_c)[t] for t in contenders]
+        # medals drawn from teams people actually rated (popularity-weighted),
+        # restricted to the teams that qualified in THAT run
+        cont_w = (_Counter(u.get('champion_pick') for u in users if u.get('champion_pick'))
+                  + _Counter(u.get('runnerup_pick') for u in users if u.get('runnerup_pick'))
+                  + _Counter(u.get('bronze_pick') for u in users if u.get('bronze_pick')))
 
-        def draw_medals():
-            if len(contenders) >= 3:
-                pool = list(zip(contenders, cweights)); out = []
-                for _ in range(3):
-                    tot = sum(w for _, w in pool); r = rng.random() * tot; acc = 0
-                    for j, (it, w) in enumerate(pool):
-                        acc += w
-                        if r <= acc:
-                            out.append(it); pool.pop(j); break
-                return out
-            return rng.sample(COUNTRIES, 3) if len(COUNTRIES) >= 3 else [None, None, None]
+        def draw_medals(qualset):
+            pool = [(t, w) for t, w in cont_w.items() if (not qualset or t in qualset)]
+            if len(pool) < 3:
+                pool = [(t, 1) for t in qualset] if qualset else [(t, 1) for t in cont_w]
+            out = []
+            for _ in range(3):
+                if not pool:
+                    break
+                tot = sum(w for _, w in pool); r = rng.random() * tot; acc = 0
+                for j, (it, w) in enumerate(pool):
+                    acc += w
+                    if r <= acc:
+                        out.append(it); pool.pop(j); break
+            while len(out) < 3:
+                out.append(None)
+            return out
 
+        GW, GR, QB = scoring.GROUP_WINNER_BONUS, scoring.GROUP_RUNNERUP_BONUS, scoring.QUALIFY_BONUS
+        _stand = scoring._standings
+        cat = scoring.categorize
         win = {u: 0 for u in uids}
         top3 = {u: 0 for u in uids}
         totals = {u: [] for u in uids}
 
         for _ in range(n_runs):
             score = dict(now_pts)
-            for m in remaining:                    # remaining match points
-                rh, ra = poisson(lamH), poisson(lamA)
-                stage = m['stage']
-                for uid in uids:
-                    p = pred_by.get((uid, m['id']))
-                    if p:
-                        ph, pa, jk = p['pred_home'], p['pred_away'], p.get('use_joker')
-                    elif m['id'] in locked_ids:
-                        ph, pa, jk = 0, 0, False
+            thirds_sim = []
+            group_win = {}
+            user_quals = {u: set() for u in uids}
+            user_thirds = {u: [] for u in uids}
+            # ---- GROUP STAGE: all 72 games + group/qualifier bonus ----
+            for g, gteams in GROUPS.items():
+                actual_rows = []
+                user_rows = {u: [] for u in uids}
+                for (i, j) in PAIRS:
+                    h, a = gteams[i], gteams[j]
+                    rm = real_group.get((g, frozenset((h, a))))
+                    is_fin = bool(rm and rm['id'] in finished_ids)
+                    if is_fin:
+                        oh, oa, ah, aa = rm['home_team'], rm['away_team'], rm['home_score'], rm['away_score']
                     else:
-                        ph, pa = proj_pick(uid); jk = False
-                    _, bp = scoring.categorize(stage, ph, pa, rh, ra)
-                    score[uid] += bp * (2 if jk else 1)
-            if not medals_done:                        # medals (still up for grabs)
-                g, s, b = draw_medals()
+                        oh, oa, ah, aa = h, a, poisson(lamH), poisson(lamA)
+                    actual_rows.append((oh, oa, ah, aa))
+                    for uid in uids:
+                        if rm and pred_by.get((uid, rm['id'])):
+                            p = pred_by[(uid, rm['id'])]
+                            ho, ao, ph, pa = rm['home_team'], rm['away_team'], p['pred_home'], p['pred_away']
+                        elif rm and rm['id'] in locked_real:
+                            ho, ao, ph, pa = rm['home_team'], rm['away_team'], 0, 0
+                        else:
+                            ph, pa = proj_pick(uid); ho, ao = h, a
+                        user_rows[uid].append((ho, ao, ph, pa))
+                        if not is_fin:        # finished games already counted in baseline
+                            rhh, raa = (ah, aa) if (ho, ao) == (oh, oa) else (aa, ah)
+                            _, bp = cat('group', ph, pa, rhh, raa)
+                            score[uid] += bp
+                st_act = _stand(actual_rows)
+                if g not in group_official and len(st_act) >= 2:
+                    group_win[g] = (st_act[0][0], st_act[1][0])
+                if len(st_act) >= 3:
+                    thirds_sim.append((st_act[2][0], st_act[2][1]))
+                for uid in uids:
+                    pst = _stand(user_rows[uid])
+                    if pst:
+                        user_quals[uid].add(pst[0][0])
+                    if len(pst) >= 2:
+                        user_quals[uid].add(pst[1][0])
+                    if len(pst) >= 3:
+                        user_thirds[uid].append((pst[2][0], pst[2][1]))
+                    if g in group_win:
+                        w_, r_ = group_win[g]
+                        if pst and pst[0][0] == w_: score[uid] += GW
+                        if len(pst) >= 2 and pst[1][0] == r_: score[uid] += GR
+            # ---- QUALIFIER bonus (best-8 thirds, like the engine) ----
+            if official_quals:
+                off_quals = official_quals
+            else:
+                best_thirds = sorted(thirds_sim, key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf']),
+                                     reverse=True)[:8]
+                off_quals = {t for wr in group_win.values() for t in wr} | {t for t, _ in best_thirds}
+                for uid in uids:
+                    ut = sorted(user_thirds[uid], key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf']),
+                                reverse=True)[:8]
+                    uq = user_quals[uid] | {t for t, _ in ut}
+                    score[uid] += QB * len(uq & off_quals)
+            # ---- KNOCKOUTS: real games + synthetic fillers (escalating tiers) ----
+            for m in matches:
+                if m['stage'] in ('r32', 'r16', 'qf', 'sf', 'third', 'final') and m['id'] not in finished_ids:
+                    rh, ra = poisson(lamN), poisson(lamN)
+                    for uid in uids:
+                        p = pred_by.get((uid, m['id']))
+                        if p:
+                            ph, pa = p['pred_home'], p['pred_away']
+                        elif m['id'] in locked_real:
+                            ph, pa = 0, 0
+                        else:
+                            ph, pa = proj_pick(uid)
+                        _, bp = cat(m['stage'], ph, pa, rh, ra)
+                        score[uid] += bp
+            for stg, cnt in KO_STAGES:
+                for _g in range(max(0, cnt - real_ko.get(stg, 0))):
+                    rh, ra = poisson(lamN), poisson(lamN)
+                    for uid in uids:
+                        ph, pa = proj_pick(uid)
+                        _, bp = cat(stg, ph, pa, rh, ra)
+                        score[uid] += bp
+            # ---- MEDALS ----
+            if not medals_done:
+                gm, sm, bm = draw_medals(off_quals)
                 for u in users:
                     uid = u['id']
-                    if u.get('champion_pick') == g: score[uid] += scoring.MEDAL_GOLD
-                    if u.get('runnerup_pick') == s: score[uid] += scoring.MEDAL_SILVER
-                    if u.get('bronze_pick') == b:   score[uid] += scoring.MEDAL_BRONZE
+                    if u.get('champion_pick') == gm: score[uid] += scoring.MEDAL_GOLD
+                    if u.get('runnerup_pick') == sm: score[uid] += scoring.MEDAL_SILVER
+                    if u.get('bronze_pick') == bm:   score[uid] += scoring.MEDAL_BRONZE
             ranked = sorted(uids, key=lambda u: score[u], reverse=True)
             win[ranked[0]] += 1
             for u in ranked[:3]:
@@ -1043,8 +1149,11 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
             st.dataframe(pdf, use_container_width=True, hide_index=True,
                          height=min(600, 60 + 35 * len(pdf)))
 
-        st.caption("ℹ️ Մոդելը՝ թիմերը հավասար ուժի, արդյունքները՝ ըստ իրական խաղերի միջինի, "
-                   "մեդալները՝ պատահական։ Խմբային/որակավորման ապագա բոնուսները դեռ ներառված չեն։")
+        st.caption("ℹ️ Սիմուլյացիան ներառում է ԲՈԼՈՐ մնացած խաղերը՝ խմբային փուլ (72 խաղ) + "
+                   "խմբային ու որակավորման բոնուսներ + բոլոր փլեյ-օֆ փուլերը (աճող միավորներ՝ "
+                   "մինչև եզրափակիչ 36) + մեդալներ։ Թիմերը՝ հավասար ուժի, արդյունքները՝ ըստ իրական "
+                   "խաղերի միջինի, մեդալները՝ ըստ մասնակիցների ընտրած ֆավորիտների։ Ապագա խաղերի "
+                   "կանխատեսումները գնահատվում են ձեր ոճով։")
 
 
 # ===================  PAGE: ADMIN  ===========================================

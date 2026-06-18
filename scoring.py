@@ -144,6 +144,22 @@ def _chunks(seq, n=400):
         yield seq[i:i + n]
 
 
+def _all(sb, name):
+    """Fetch EVERY row of a table, paging past PostgREST's 1000-row default cap.
+
+    A plain .select('*') silently returns only the first 1000 rows. With 57
+    users predicting up to 104 games each, `predictions` blows past 1000, so the
+    engine MUST page or it will miss rows — and a missed prediction gets wrongly
+    treated as the 0-0 default below. Always use this for predictions."""
+    out, start = [], 0
+    while True:
+        chunk = sb.table(name).select('*').range(start, start + 999).execute().data or []
+        out += chunk
+        if len(chunk) < 1000:
+            return out
+        start += 1000
+
+
 def _table(sb, name):
     """Read a table, tolerating the case where it doesn't exist yet."""
     try:
@@ -165,9 +181,9 @@ def recalculate(sb, commit=True):
     commit=False computes everything but writes NOTHING to the DB and returns a
     dict {user_id: {total, bonus, exact, diff, outcome, wrong}} for previewing.
     """
-    users   = sb.table('users').select('*').execute().data
-    matches = sb.table('matches').select('*').execute().data
-    preds   = sb.table('predictions').select('*').execute().data
+    users   = _all(sb, 'users')
+    matches = _all(sb, 'matches')
+    preds   = _all(sb, 'predictions')
 
     # ---- admin-entered OFFICIAL results (the only source of bonus) ----------
     group_official = {r['group_name']: r for r in _table(sb, 'group_official')}

@@ -36,6 +36,19 @@ if not SUPABASE_SERVICE:
     st.warning("⚠️ Աշխատում է հանրային բանալիով — տվյալները չեն երևա։ Անհրաժեշտ է SERVICE_ROLE բանալին։")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def fetch_all(table, columns="*"):
+    """Read EVERY row, paging past PostgREST's silent 1000-row cap. Use this for
+    any full-table read of `predictions` (it already exceeds 1000 rows)."""
+    out, start = [], 0
+    while True:
+        chunk = supabase.table(table).select(columns).range(start, start + 999).execute().data or []
+        out += chunk
+        if len(chunk) < 1000:
+            return out
+        start += 1000
+
+
 STAGES = {
     "group": "Խմբային փուլ",
     "r32":   "1/16 (32-ի փուլ)",
@@ -453,7 +466,7 @@ elif page == "ԱՂՅՈՒՍԱԿ":
     # first prediction is the meaningful "who got there first"). Deterministic.
     if not df.empty:
         first_pred = {}
-        for p in (supabase.table("predictions").select("user_id, created_at").execute().data or []):
+        for p in fetch_all("predictions", "user_id, created_at"):
             uid, ts = p['user_id'], (p.get('created_at') or '')
             if uid not in first_pred or ts < first_pred[uid]:
                 first_pred[uid] = ts
@@ -858,8 +871,7 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
         if len(users) < 2:
             return None, None
         matches = supabase.table("matches").select("*").execute().data or []
-        preds = supabase.table("predictions").select(
-            "user_id, match_id, pred_home, pred_away, use_joker").execute().data or []
+        preds = fetch_all("predictions", "user_id, match_id, pred_home, pred_away, use_joker")
         try:
             tr = supabase.table("tournament_result").select("*").execute().data or []
         except Exception:
@@ -1102,8 +1114,8 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
         return df, pat
 
     _av = supabase.table("users").select("total_points").eq("is_active", True).execute().data or []
-    _pc = supabase.table("predictions").select("id").execute().data or []
-    version = f"{sum((u.get('total_points') or 0) for u in _av)}-{len(_pc)}"
+    _pc = supabase.table("predictions").select("id", count="exact").limit(1).execute().count or 0
+    version = f"{sum((u.get('total_points') or 0) for u in _av)}-{_pc}"
 
     with st.spinner("Հաշվարկվում է հաղթելու հավանականությունը..."):
         df, pat = _win_probabilities(version)
@@ -1435,7 +1447,7 @@ elif page == "ԱԴՄԻՆ" and is_admin:
         email_of = {u['id']: u['email'] for u in a_users}
         active_ids = set(name_of.keys())
 
-        all_preds = supabase.table("predictions").select("user_id, match_id").execute().data or []
+        all_preds = fetch_all("predictions", "user_id, match_id")
 
         # upcoming = open (scheduled) AND not yet locked → still predictable
         allm = supabase.table("matches").select("*").order("kickoff_time").execute().data or []

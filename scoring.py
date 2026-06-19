@@ -60,10 +60,16 @@ def base_points(stage, ph, pa, rh, ra):
 def _standings(rows):
     """rows: list of (home_team, away_team, home_score, away_score).
 
-    Ranks teams by the exact FIFA group method:
-      1) Points  2) Goal difference  3) Goals scored
-      4) Head-to-head points  5) H2H goal difference  6) H2H goals scored
-      7) stable first-seen order (Fair Play / drawing of lots aren't computable).
+    Ranks teams by the exact FIFA World Cup 2026 group method. After points,
+    teams still equal on points are separated by, in order:
+      STEP 1 - matches BETWEEN the tied teams only (head-to-head), re-applied
+               recursively to any sub-group H2H leaves still level:
+        1) H2H points  2) H2H goal difference  3) H2H goals scored
+      STEP 2 - all group matches (only when STEP 1 can't separate the group):
+        4) overall goal difference  5) overall goals scored
+      STEP 3 - team conduct score / FIFA World Ranking: not computable from
+               predicted scores, so a stable first-seen order is the final
+               fallback (replaces FIFA's ranking/drawing of lots).
     Returns an ordered list of (team, stats)."""
     t = defaultdict(lambda: {'pts': 0, 'gf': 0, 'ga': 0})
     order = []                              # first-seen order -> stable fallback
@@ -103,40 +109,49 @@ def _standings(rows):
             v['gd'] = v['gf'] - v['ga']
         return h
 
-    def rank(subset, use_h2h):
-        """Order `subset` by FIFA criteria. With use_h2h=False use the overall
-        table; ties are then broken by head-to-head among the tied teams, and if
-        that still leaves a sub-group tied, head-to-head is RE-APPLIED to just
-        that sub-group (recursive, exactly as FIFA does). Unbreakable ties fall
-        to stable first-seen order."""
-        if len(subset) <= 1:
-            return list(subset)
-        stats = t if not use_h2h else h2h(subset)
-        ordered = sorted(subset,
-                         key=lambda tm: (stats[tm]['pts'], stats[tm]['gd'],
-                                         stats[tm]['gf'], -idx[tm]),
-                         reverse=True)
+    def _blocks(ordered, key):
+        """Split an already-sorted list into consecutive runs of equal key."""
         out, i = [], 0
         while i < len(ordered):
             j = i
-            key_i = (stats[ordered[i]]['pts'], stats[ordered[i]]['gd'], stats[ordered[i]]['gf'])
-            while (j + 1 < len(ordered) and
-                   (stats[ordered[j + 1]]['pts'], stats[ordered[j + 1]]['gd'],
-                    stats[ordered[j + 1]]['gf']) == key_i):
+            while j + 1 < len(ordered) and key(ordered[j + 1]) == key(ordered[i]):
                 j += 1
-            block = ordered[i:j + 1]
-            if len(block) == 1:
-                out.append(block[0])
-            elif not use_h2h:
-                out.extend(rank(block, use_h2h=True))          # overall tie -> H2H
-            elif len(block) < len(subset):
-                out.extend(rank(block, use_h2h=True))          # refine the sub-group
-            else:
-                out.extend(block)                              # H2H can't separate -> first-seen
+            out.append(ordered[i:j + 1])
             i = j + 1
         return out
 
-    return [(tm, t[tm]) for tm in rank(list(t.keys()), use_h2h=False)]
+    def tiebreak(subset):
+        """Order a set of teams that are ALL equal on points, FIFA 2026 style.
+        STEP 1 (head-to-head among `subset`) is applied first; if it separates
+        the group, it is RE-APPLIED recursively to every sub-group it leaves
+        still level (the H2H mini-table is recomputed among only those teams).
+        Only a group that head-to-head cannot separate at all falls through to
+        STEP 2 (overall goal difference, then overall goals). STEP 3 (conduct /
+        FIFA ranking) isn't computable, so -idx gives a stable first-seen
+        fallback baked into both sorts."""
+        if len(subset) <= 1:
+            return list(subset)
+        # STEP 1: head-to-head mini-table among the tied teams.
+        h = h2h(subset)
+        key1 = lambda tm: (h[tm]['pts'], h[tm]['gd'], h[tm]['gf'])
+        ordered = sorted(subset, key=lambda tm: key1(tm) + (-idx[tm],), reverse=True)
+        blocks = _blocks(ordered, key1)
+        if len(blocks) > 1:                       # H2H separated something -> recurse
+            out = []
+            for blk in blocks:
+                out.extend(tiebreak(blk))
+            return out
+        # STEP 2: H2H couldn't separate this group -> overall GD, then goals.
+        return sorted(subset,
+                      key=lambda tm: (t[tm]['gd'], t[tm]['gf'], -idx[tm]),
+                      reverse=True)
+
+    # Separate by points first, then tie-break each block of equal-points teams.
+    ranked = sorted(t.keys(), key=lambda tm: (t[tm]['pts'], -idx[tm]), reverse=True)
+    out = []
+    for blk in _blocks(ranked, lambda tm: t[tm]['pts']):
+        out.extend(tiebreak(blk))
+    return [(tm, t[tm]) for tm in out]
 
 
 def _chunks(seq, n=400):

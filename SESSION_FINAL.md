@@ -116,7 +116,7 @@ You get the **best** matching tier only (exact = just the exact value, not exact
 
 ### 7c. Group bonus (admin-entered winner/runner-up)
 - The **real** group winner & runner-up are **entered by the admin** (`group_official`), never derived from scores.
-- The **user's predicted** group table is ranked by the **exact FIFA method**: Points → Goal Difference → Goals Scored → **Head-to-head** (points, GD, goals among the tied teams, applied recursively) → stable order.
+- The **user's predicted** group table is ranked by the **exact FIFA World Cup 2026 method**: Points → **Head-to-head among the tied teams first** (H2H points → H2H goal difference → H2H goals, re-applied recursively to any sub-group it leaves level) → then overall **goal difference** → overall **goals scored** → stable first-seen order (conduct score / FIFA ranking aren't computable). Head-to-head is applied **before** overall GD, per the 2026 regulations.
 - **Eligibility: the user must have predicted ALL 6 games of the group.** A partial prediction (even 5 of 6) earns **no** group bonus and contributes **no** qualifiers from that group — match points for the individual predicted games are unaffected.
 - Correct group **Winner** → **+6**, correct **Runner-up** → **+4**, per group (×12). Awarded only after the admin enters that group's official result.
 

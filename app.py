@@ -1120,6 +1120,45 @@ elif page == "ՎԵՐԼՈՒԾՈՒԹՅՈՒՆ":
     with st.spinner("Հաշվարկվում է հաղթելու հավանականությունը..."):
         df, pat = _win_probabilities(version)
 
+    # ---- Anonymous medal-pick popularity (above the probabilities) ----
+    _medal_users = supabase.table("users").select(
+        "champion_pick, runnerup_pick, bronze_pick").eq("is_active", True).execute().data or []
+    _MEDALS = [("champion_pick", "🥇 ՈՍԿԻ", "#FFD700"),
+               ("runnerup_pick", "🥈 ԱՐԾԱԹ", "#C0C0C0"),
+               ("bronze_pick",   "🥉 ԲՐՈՆԶ", "#CD7F32")]
+    if any(u.get(k) for u in _medal_users for k, _, _ in _MEDALS):
+        st.markdown("### 🏅 ՈՒՄ ԵՆ ԿԱՆԽԱՏԵՍՈՒՄ ՄԵԴԱԼՆԵՐԻՆ")
+        st.caption("Մասնակիցների ընտրած ֆավորիտները՝ անանուն, ընդհանուր պատկերը (առանց անունների)։")
+        _mcols = st.columns(3)
+        for _col, (_key, _label, _accent) in zip(_mcols, _MEDALS):
+            cnt = _Counter(u[_key] for u in _medal_users if u.get(_key))
+            voters = sum(cnt.values())
+            with _col:
+                rows_html = ""
+                if cnt:
+                    top = cnt.most_common(6)
+                    mx = top[0][1]
+                    for team, n in top:
+                        barw = max(6, int(100 * n / mx))
+                        pct = 100.0 * n / voters
+                        rows_html += (
+                            f"<div style='margin:6px 0;'>"
+                            f"<div style='display:flex; justify-content:space-between; font-size:0.8rem;'>"
+                            f"<span style='color:#fff;'>{flag(team)}{team}</span>"
+                            f"<span style='color:{_accent}; font-weight:700;'>{n} · {pct:.0f}%</span></div>"
+                            f"<div style='background:rgba(255,255,255,0.07); border-radius:5px; height:8px; margin-top:3px;'>"
+                            f"<div style='width:{barw}%; height:8px; border-radius:5px;"
+                            f" background:linear-gradient(90deg,#00d4ff,{_accent});'></div></div></div>")
+                else:
+                    rows_html = "<div class='muted' style='font-size:0.8rem;'>—</div>"
+                st.markdown(
+                    f"<div class='glass-card' style='padding:10px 12px; margin-bottom:10px;'>"
+                    f"<div style='text-align:center; font-weight:900; color:{_accent};"
+                    f" font-size:1rem; margin-bottom:4px;'>{_label}</div>"
+                    f"<div style='text-align:center;'><small class='muted'>{voters} ընտրություն</small></div>"
+                    f"{rows_html}</div>", unsafe_allow_html=True)
+        st.divider()
+
     if df is None or df.empty:
         st.info("Դեռ բավարար տվյալներ չկան սիմուլյացիայի համար։")
     else:

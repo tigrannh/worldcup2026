@@ -787,6 +787,17 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
                     standings = scoring._standings(
                         [(mm['home_team'], mm['away_team'], p['pred_home'], p['pred_away'])
                          for mm, p in done_pairs])
+                    # Mirror the manual tiebreak override in scoring.recalculate:
+                    # Aleksan Azaryan, Group H, Uruguay vs Cape Verde dead heat ->
+                    # show Cape Verde ahead (only while genuinely tied).
+                    if user_data['id'] == '4007169f-0db7-4866-b5d2-37cc3a6593c7' and g == 'H':
+                        nm = [t for t, _ in standings]
+                        if 'Ուրուգվայ' in nm and 'Կաբո Վերդե' in nm:
+                            iu, ic = nm.index('Ուրուգվայ'), nm.index('Կաբո Վերդե')
+                            su, sc = standings[iu][1], standings[ic][1]
+                            if (su['pts'] == sc['pts'] and su['gd'] == sc['gd']
+                                    and su['gf'] == sc['gf'] and iu < ic):
+                                standings[iu], standings[ic] = standings[ic], standings[iu]
                     complete = done == total
                     html = (f"<div class='glass-card' style='padding:12px;'>"
                             f"<b style='color:#FFD700; font-family:Orbitron;'>Խումբ {g}</b>")

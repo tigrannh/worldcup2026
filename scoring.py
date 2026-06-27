@@ -308,6 +308,23 @@ def recalculate(sb, commit=True):
                 rows.append((mm['home_team'], mm['away_team'], ph, pa))
             pst = _standings(rows)
 
+            # ---- MANUAL TIEBREAK OVERRIDE (admin decision) ------------------
+            # Aleksan Azaryan, Group H: his Uruguay vs Cape Verde is a perfect
+            # dead heat (equal points / head-to-head / GD / goals), so the engine
+            # settles it by its deterministic draw-of-lots fallback and lands
+            # Uruguay above Cape Verde. Admin chose to flip this single tie so
+            # Cape Verde ranks ahead. Applies ONLY to this user+group and only
+            # while the two are genuinely tied; delete this block to revert.
+            if uid == '4007169f-0db7-4866-b5d2-37cc3a6593c7' and g == 'H':
+                names = [tm for tm, _ in pst]
+                if 'Ուրուգվայ' in names and 'Կաբո Վերդե' in names:
+                    iu, ic = names.index('Ուրուգվայ'), names.index('Կաբո Վերդե')
+                    su, sc = pst[iu][1], pst[ic][1]
+                    tied = (su['pts'] == sc['pts'] and su['gd'] == sc['gd']
+                            and su['gf'] == sc['gf'])
+                    if tied and iu < ic:                 # Uruguay currently ahead
+                        pst[iu], pst[ic] = pst[ic], pst[iu]
+
             off = group_official.get(g)
             if off:
                 if pst and pst[0][0] == off['winner_team']:

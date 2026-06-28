@@ -325,6 +325,23 @@ def recalculate(sb, commit=True):
                     if tied and iu < ic:                 # Uruguay currently ahead
                         pst[iu], pst[ic] = pst[ic], pst[iu]
 
+            # ---- MANUAL TIEBREAK OVERRIDE (admin decision) ------------------
+            # Anna Barseghyan, Group J: her Algeria vs Austria is a perfect dead
+            # heat (equal points / head-to-head 1-1 / GD / goals), so the engine
+            # settles it by its deterministic draw-of-lots fallback and lands
+            # Algeria above Austria. Admin chose to flip this single tie so
+            # Austria ranks ahead. Applies ONLY to this user+group and only
+            # while the two are genuinely tied; delete this block to revert.
+            if uid == '41e50656-5169-492b-beb1-095774cf2619' and g == 'J':
+                names = [tm for tm, _ in pst]
+                if 'Ալժիր' in names and 'Ավստրիա' in names:
+                    ial, iau = names.index('Ալժիր'), names.index('Ավստրիա')
+                    sal, sau = pst[ial][1], pst[iau][1]
+                    tied = (sal['pts'] == sau['pts'] and sal['gd'] == sau['gd']
+                            and sal['gf'] == sau['gf'])
+                    if tied and ial < iau:               # Algeria currently ahead
+                        pst[ial], pst[iau] = pst[iau], pst[ial]
+
             off = group_official.get(g)
             if off:
                 if pst and pst[0][0] == off['winner_team']:

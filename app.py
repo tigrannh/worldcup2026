@@ -798,6 +798,16 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
                             if (su['pts'] == sc['pts'] and su['gd'] == sc['gd']
                                     and su['gf'] == sc['gf'] and iu < ic):
                                 standings[iu], standings[ic] = standings[ic], standings[iu]
+                    # Anna Barseghyan, Group J, Algeria vs Austria dead heat ->
+                    # show Austria ahead (only while genuinely tied).
+                    if user_data['id'] == '41e50656-5169-492b-beb1-095774cf2619' and g == 'J':
+                        nm = [t for t, _ in standings]
+                        if 'Ալժիր' in nm and 'Ավստրիա' in nm:
+                            ial, iau = nm.index('Ալժիր'), nm.index('Ավստրիա')
+                            sal, sau = standings[ial][1], standings[iau][1]
+                            if (sal['pts'] == sau['pts'] and sal['gd'] == sau['gd']
+                                    and sal['gf'] == sau['gf'] and ial < iau):
+                                standings[ial], standings[iau] = standings[iau], standings[ial]
                     complete = done == total
                     html = (f"<div class='glass-card' style='padding:12px;'>"
                             f"<b style='color:#FFD700; font-family:Orbitron;'>Խումբ {g}</b>")

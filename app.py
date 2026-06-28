@@ -789,27 +789,9 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
                         [(mm['home_team'], mm['away_team'],
                           (p['pred_home'] if p else 0), (p['pred_away'] if p else 0))
                          for mm, p in zip(gms, preds)])
-                    # Mirror the manual tiebreak override in scoring.recalculate:
-                    # Aleksan Azaryan, Group H, Uruguay vs Cape Verde dead heat ->
-                    # show Cape Verde ahead (only while genuinely tied).
-                    if user_data['id'] == '4007169f-0db7-4866-b5d2-37cc3a6593c7' and g == 'H':
-                        nm = [t for t, _ in standings]
-                        if 'Ուրուգվայ' in nm and 'Կաբո Վերդե' in nm:
-                            iu, ic = nm.index('Ուրուգվայ'), nm.index('Կաբո Վերդե')
-                            su, sc = standings[iu][1], standings[ic][1]
-                            if (su['pts'] == sc['pts'] and su['gd'] == sc['gd']
-                                    and su['gf'] == sc['gf'] and iu < ic):
-                                standings[iu], standings[ic] = standings[ic], standings[iu]
-                    # Anna Barseghyan, Group J, Algeria vs Austria dead heat ->
-                    # show Austria ahead (only while genuinely tied).
-                    if user_data['id'] == '41e50656-5169-492b-beb1-095774cf2619' and g == 'J':
-                        nm = [t for t, _ in standings]
-                        if 'Ալժիր' in nm and 'Ավստրիա' in nm:
-                            ial, iau = nm.index('Ալժիր'), nm.index('Ավստրիա')
-                            sal, sau = standings[ial][1], standings[iau][1]
-                            if (sal['pts'] == sau['pts'] and sal['gd'] == sau['gd']
-                                    and sal['gf'] == sau['gf'] and ial < iau):
-                                standings[ial], standings[iau] = standings[iau], standings[ial]
+                    # Mirror the manual tiebreak overrides from scoring.recalculate
+                    # so the displayed table matches the one that awards the bonus.
+                    scoring.apply_tiebreak_override(user_data['id'], g, standings)
                     complete = done == total
                     html = (f"<div class='glass-card' style='padding:12px;'>"
                             f"<b style='color:#FFD700; font-family:Orbitron;'>Խումբ {g}</b>")

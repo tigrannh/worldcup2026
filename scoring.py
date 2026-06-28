@@ -40,6 +40,47 @@ QUALIFY_BONUS        = 1                      # per correctly predicted qualifie
 MEDAL_GOLD, MEDAL_SILVER, MEDAL_BRONZE = 30, 18, 12
 
 
+# --- MANUAL TIEBREAK OVERRIDES (admin decisions) ------------------------------
+# Some users' predicted group tables contain a PERFECT dead heat: two teams equal
+# on every FIFA-computable criterion (points, head-to-head, overall goal
+# difference, overall goals). FIFA's remaining steps (fair-play, world ranking,
+# drawing of lots) can't be derived from predicted scores, so the engine settles
+# such ties by a deterministic first-seen fallback. Where that fallback lands a
+# user OPPOSITE to the admin's official winner/runner-up, the admin chose to flip
+# the single tie so the user matches the official result.
+#
+# Each entry: (user_id, group) -> (team_currently_ahead, team_to_promote).
+# The flip is applied ONLY while the two are genuinely tied (equal pts / GD / GF
+# — their head-to-head is also level in every case below). Delete an entry to
+# revert that one case; it touches no other user or group.
+TIEBREAK_OVERRIDES = {
+    ('4007169f-0db7-4866-b5d2-37cc3a6593c7', 'H'): ('Ուրուգվայ', 'Կաբո Վերդե'),  # Aleksan Azaryan
+    ('41e50656-5169-492b-beb1-095774cf2619', 'J'): ('Ալժիր', 'Ավստրիա'),          # Anna Barseghyan
+    ('0436bbc0-6dce-4a39-a5d8-f5ae46b312e3', 'B'): ('Կանադա', 'Շվեյցարիա'),       # Tigran Hakobyan
+    ('636a4fe1-89f2-422f-b76b-789ab4f9c861', 'I'): ('Սենեգալ', 'Նորվեգիա'),       # Ani H. Sargsyan
+    ('3382de4c-beca-4d61-9b7e-36202104558b', 'B'): ('Կանադա', 'Կատար'),           # Sona Nazaryan
+}
+
+
+def apply_tiebreak_override(uid, g, pst):
+    """Mutate `pst` (a list of (team, stats) from _standings) in place: if this
+    user+group has a manual override AND the two named teams are a genuine dead
+    heat (equal points / GD / goals) with the 'currently ahead' team really
+    ahead, swap them so the promoted team ranks higher. No-op otherwise."""
+    pair = TIEBREAK_OVERRIDES.get((uid, g))
+    if not pair:
+        return
+    ahead, promote = pair
+    names = [tm for tm, _ in pst]
+    if ahead in names and promote in names:
+        ia, ip = names.index(ahead), names.index(promote)
+        sa, sp = pst[ia][1], pst[ip][1]
+        tied = (sa['pts'] == sp['pts'] and sa['gd'] == sp['gd']
+                and sa['gf'] == sp['gf'])
+        if tied and ia < ip:                 # 'ahead' team currently ranks higher
+            pst[ia], pst[ip] = pst[ip], pst[ia]
+
+
 def categorize(stage, ph, pa, rh, ra):
     """Returns (category, points): 'exact' / 'diff' / 'outcome' / 'wrong'."""
     exact, diff, outcome = POINTS[stage]
@@ -307,40 +348,7 @@ def recalculate(sb, commit=True):
                 pa = up['pred_away'] if up else 0
                 rows.append((mm['home_team'], mm['away_team'], ph, pa))
             pst = _standings(rows)
-
-            # ---- MANUAL TIEBREAK OVERRIDE (admin decision) ------------------
-            # Aleksan Azaryan, Group H: his Uruguay vs Cape Verde is a perfect
-            # dead heat (equal points / head-to-head / GD / goals), so the engine
-            # settles it by its deterministic draw-of-lots fallback and lands
-            # Uruguay above Cape Verde. Admin chose to flip this single tie so
-            # Cape Verde ranks ahead. Applies ONLY to this user+group and only
-            # while the two are genuinely tied; delete this block to revert.
-            if uid == '4007169f-0db7-4866-b5d2-37cc3a6593c7' and g == 'H':
-                names = [tm for tm, _ in pst]
-                if 'Ուրուգվայ' in names and 'Կաբո Վերդե' in names:
-                    iu, ic = names.index('Ուրուգվայ'), names.index('Կաբո Վերդե')
-                    su, sc = pst[iu][1], pst[ic][1]
-                    tied = (su['pts'] == sc['pts'] and su['gd'] == sc['gd']
-                            and su['gf'] == sc['gf'])
-                    if tied and iu < ic:                 # Uruguay currently ahead
-                        pst[iu], pst[ic] = pst[ic], pst[iu]
-
-            # ---- MANUAL TIEBREAK OVERRIDE (admin decision) ------------------
-            # Anna Barseghyan, Group J: her Algeria vs Austria is a perfect dead
-            # heat (equal points / head-to-head 1-1 / GD / goals), so the engine
-            # settles it by its deterministic draw-of-lots fallback and lands
-            # Algeria above Austria. Admin chose to flip this single tie so
-            # Austria ranks ahead. Applies ONLY to this user+group and only
-            # while the two are genuinely tied; delete this block to revert.
-            if uid == '41e50656-5169-492b-beb1-095774cf2619' and g == 'J':
-                names = [tm for tm, _ in pst]
-                if 'Ալժիր' in names and 'Ավստրիա' in names:
-                    ial, iau = names.index('Ալժիր'), names.index('Ավստրիա')
-                    sal, sau = pst[ial][1], pst[iau][1]
-                    tied = (sal['pts'] == sau['pts'] and sal['gd'] == sau['gd']
-                            and sal['gf'] == sau['gf'])
-                    if tied and ial < iau:               # Algeria currently ahead
-                        pst[ial], pst[iau] = pst[iau], pst[ial]
+            apply_tiebreak_override(uid, g, pst)
 
             off = group_official.get(g)
             if off:

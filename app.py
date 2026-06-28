@@ -770,6 +770,30 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
     for mm in gmatches:
         if mm.get('group_name'):
             bygroup.setdefault(mm['group_name'], []).append(mm)
+
+    # Official results + my standings per group, computed EXACTLY like
+    # scoring.recalculate (missing games = 0-0, manual overrides applied) so the
+    # per-group bonus shown below equals the points actually awarded.
+    group_official = {r['group_name']: r for r in (supabase.table("group_official")
+        .select("group_name,winner_team,runnerup_team").execute().data or [])}
+    official_quals = {r['team_name'] for r in (supabase.table("qualifiers")
+        .select("team_name").execute().data or [])}
+    my_standings = {}
+    _thirds = []
+    for g, gms in bygroup.items():
+        if len(gms) < 6:
+            continue
+        st_g = scoring._standings([(mm['home_team'], mm['away_team'],
+            (myp.get(mm['id']) or {}).get('pred_home', 0),
+            (myp.get(mm['id']) or {}).get('pred_away', 0)) for mm in gms])
+        scoring.apply_tiebreak_override(user_data['id'], g, st_g)
+        my_standings[g] = st_g
+        if len(st_g) >= 3:
+            _thirds.append((st_g[2][0], st_g[2][1]))
+    # my predicted best-8 third-placed teams (same key as scoring): pts->gd->gf
+    best8_thirds = {t for t, _ in sorted(_thirds,
+        key=lambda x: (x[1]['pts'], x[1]['gd'], x[1]['gf']), reverse=True)[:8]}
+
     if not bygroup:
         st.info("Խմբային խաղերը դեռ ավելացված չեն։")
     else:
@@ -782,33 +806,50 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
             total = len(gms)
             with gcols[i % 3]:
                 if done_pairs:
-                    # Build the ranking exactly like scoring.recalculate: every
-                    # game the user didn't predict counts as 0-0, so the table
-                    # shown here matches the one that actually awards the bonus.
-                    standings = scoring._standings(
-                        [(mm['home_team'], mm['away_team'],
-                          (p['pred_home'] if p else 0), (p['pred_away'] if p else 0))
-                         for mm, p in zip(gms, preds)])
-                    # Mirror the manual tiebreak overrides from scoring.recalculate
-                    # so the displayed table matches the one that awards the bonus.
-                    scoring.apply_tiebreak_override(user_data['id'], g, standings)
+                    # Reuse the standings computed above (0-0 fills + overrides),
+                    # so the table and per-group bonus match the awarded points.
+                    standings = my_standings.get(g) or []
                     complete = done == total
                     html = (f"<div class='glass-card' style='padding:12px;'>"
                             f"<b style='color:#FFD700; font-family:Orbitron;'>Խումբ {g}</b>")
+
+                    # --- per-group bonus breakdown (shown once official results in) ---
+                    off = group_official.get(g)
+                    gbonus = 0
+                    if off and standings:
+                        win_ok = standings[0][0] == off['winner_team']
+                        ru_ok = len(standings) >= 2 and standings[1][0] == off['runnerup_team']
+                        gbonus = (6 if win_ok else 0) + (4 if ru_ok else 0)
+                        html += ("<div style='font-size:0.82rem; margin-top:6px; padding-top:5px;"
+                                 "border-top:1px solid rgba(255,255,255,0.12);'>"
+                                 f"🥇 Հաղթող {'✅' if win_ok else '❌'} <b>+{6 if win_ok else 0}</b>"
+                                 f" &nbsp; 🥈 2-րդ {'✅' if ru_ok else '❌'} <b>+{4 if ru_ok else 0}</b></div>")
+                    qbonus = 0
+                    if official_quals and standings:
+                        cands = [standings[0][0]]
+                        if len(standings) >= 2:
+                            cands.append(standings[1][0])
+                        if len(standings) >= 3 and standings[2][0] in best8_thirds:
+                            cands.append(standings[2][0])
+                        qbonus = sum(1 for t in cands if t in official_quals)
+                        html += (f"<div style='font-size:0.82rem;'>✅ Որակավորում՝ "
+                                 f"<b>{qbonus}</b> թիմ ճիշտ <b>+{qbonus}</b></div>")
+                    if off or official_quals:
+                        html += (f"<div style='font-size:0.9rem; color:#FFD700; margin:3px 0 6px 0;'>"
+                                 f"📦 Ընդամենը խմբից՝ <b>{gbonus + qbonus}</b> միավոր</div>")
+
                     for pos, (team, stt) in enumerate(standings, start=1):
                         c = '#00ff88' if pos == 1 else ('#c0c0c0' if pos == 2 else '#E0E0E0')
                         mk = '🥇' if pos == 1 else ('🥈' if pos == 2 else f'{pos}.')
                         html += (f"<div style='display:flex; justify-content:space-between; color:{c};'>"
                                  f"<span>{mk} {team}</span><span>{stt['pts']}մ</span></div>")
                     if complete:
-                        note = ("<small class='muted'>Բոնուսը կհաշվարկվի պաշտոնական "
-                                "արդյունքից հետո։</small>")
+                        note = ""
                     else:
                         note = (f"<small class='muted'>ℹ️ Կանխատեսել ես {done}/{total} խաղ։ "
-                                f"Բաց թողած խաղերը հաշվվում են որպես <b>0-0</b>, և բոնուսը "
-                                f"հաշվարկվում է հենց այս աղյուսակով։</small>")
-                    st.markdown(html + f"<div style='margin-top:6px;'>{note}</div></div>",
-                                unsafe_allow_html=True)
+                                f"Բաց թողած խաղերը հաշվվում են որպես <b>0-0</b>։</small>")
+                    extra = f"<div style='margin-top:6px;'>{note}</div>" if note else ""
+                    st.markdown(html + extra + "</div>", unsafe_allow_html=True)
                 else:
                     st.markdown(
                         f"<div class='glass-card' style='padding:12px; opacity:0.6;'>"

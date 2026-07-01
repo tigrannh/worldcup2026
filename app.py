@@ -649,38 +649,50 @@ elif page == "ԿԱՆԽԱՏԵՍՈՒՄՆԵՐ":
                             st.error("Արդեն կանխատեսված է։")
         st.markdown('</div>', unsafe_allow_html=True)
 
+    # Each stage is a collapsible section so finished rounds (e.g. the 72 group
+    # games) don't force users to scroll past them to reach the current round.
+    # Auto-open the stage(s) that still have an open (unlocked) game; if none are
+    # open (between rounds), open the latest stage that has any games.
+    by_stage = {s: [m for m in matches if m['stage'] == s] for s in STAGE_ORDER}
+    def _stage_open(sm):
+        return any(mm.get('status') != 'finished' and now_utc() < parse_dt(mm['lock_time'])
+                   for mm in sm)
+    any_open = any(_stage_open(v) for v in by_stage.values())
+    latest_with_games = next((s for s in reversed(STAGE_ORDER) if by_stage[s]), None)
+
     for stage in STAGE_ORDER:
-        smatches = [m for m in matches if m['stage'] == stage]
-        jk_note = ""
+        smatches = by_stage[stage]
+        open_now = _stage_open(smatches)
+        expanded = open_now or (not any_open and stage == latest_with_games)
+
+        # expander labels are plain text (no HTML) — fold the count + joker in
+        label = f"{STAGES[stage]}   ({len(smatches)}/{EXPECTED[stage]})"
         if stage in JOKER_STAGES:
             left = 0 if stage in joker_used_stage else 1
-            jk_note = (f" <span style='font-size:0.95rem; color:{'#888' if left == 0 else '#FFD700'};'>"
-                       f"🃏 ՋՈԿԵՐ՝ {left}/1</span>")
-        st.markdown(
-            f"## {STAGES[stage]} "
-            f"<span style='font-size:1rem; color:#00d4ff;'>({len(smatches)}/{EXPECTED[stage]})</span>{jk_note}",
-            unsafe_allow_html=True)
+            label += f"   🃏 {left}/1"
+        if open_now:
+            label += "   🟢"
 
-        # All stages render as one flat list ordered by deadline (smatches is
-        # already sorted by kickoff_time). For the group stage the group letter
-        # is shown as a badge on each card instead of separate group blocks, so
-        # the soonest-closing game is always nearest the top — no deadline hides
-        # under a "later" group.
-        for m in smatches:
-            render_card(m)
+        with st.expander(label, expanded=expanded):
+            # Within a stage, cards render as one flat list ordered by deadline
+            # (smatches is already sorted by kickoff_time). For the group stage the
+            # group letter is shown as a badge on each card instead of separate
+            # group blocks, so the soonest-closing game is always nearest the top.
+            for m in smatches:
+                render_card(m)
 
-        # empty placeholder boxes for games not yet added (all stages, no extra text)
-        remaining = EXPECTED[stage] - len(smatches)
-        if remaining > 0:
-            pcols = st.columns(2)
-            for i in range(remaining):
-                with pcols[i % 2]:
-                    st.markdown(
-                        "<div class='glass-card' style='opacity:0.4; border-style:dashed; padding:10px;'>"
-                        "<div style='display:flex; gap:8px;'>"
-                        "<div class='team-box' style='flex:1; color:#888 !important;'>❔</div>"
-                        "<div class='team-box' style='flex:1; color:#888 !important;'>❔</div></div></div>",
-                        unsafe_allow_html=True)
+            # empty placeholder boxes for games not yet added (no extra text)
+            remaining = EXPECTED[stage] - len(smatches)
+            if remaining > 0:
+                pcols = st.columns(2)
+                for i in range(remaining):
+                    with pcols[i % 2]:
+                        st.markdown(
+                            "<div class='glass-card' style='opacity:0.4; border-style:dashed; padding:10px;'>"
+                            "<div style='display:flex; gap:8px;'>"
+                            "<div class='team-box' style='flex:1; color:#888 !important;'>❔</div>"
+                            "<div class='team-box' style='flex:1; color:#888 !important;'>❔</div></div></div>",
+                            unsafe_allow_html=True)
 
 
 # ===================  PAGE: MEDALS  ==========================================
@@ -875,7 +887,8 @@ elif page == "ԱՐԴՅՈՒՆՔՆԵՐ":
     if not rows:
         st.info("Դեռևս կանխատեսումներ չկան։ Երբ մրցաշարը սկսվի՝ քո պատմությունը կհայտնվի այստեղ։")
     else:
-        rows.sort(key=lambda r: (r['matches'] or {}).get('kickoff_time', ''))
+        # newest games on top, oldest at the bottom
+        rows.sort(key=lambda r: (r['matches'] or {}).get('kickoff_time', ''), reverse=True)
         for r in rows:
             m = r['matches'] or {}
             jk = " 🃏" if r.get('use_joker') else ""

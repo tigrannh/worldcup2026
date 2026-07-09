@@ -270,7 +270,8 @@ def login_ui():
             res = supabase.table("users").select("*").ilike("email", safe_email).execute()
             if res.data and bcrypt.checkpw(password.encode('utf-8'),
                                            res.data[0]['password_hash'].encode('utf-8')):
-                if not res.data[0].get('is_active', True):
+                _is_admin_login = (res.data[0].get('email', '').lower() == ADMIN_EMAIL)
+                if not res.data[0].get('is_active', True) and not _is_admin_login:
                     st.error("🚫 Ձեր հաշիվն անջատված է։ Դիմեք ադմինիստրատորին։")
                 else:
                     st.session_state['logged_in'] = True
